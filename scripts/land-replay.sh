@@ -115,7 +115,7 @@
 # happened to merge first. `nox -t fix` baselines on BOTH its exit code
 # (red) and its effect on the tree (a reformat, possible even on exit 0) --
 # see the baseline block below and docs/decisions.md
-# (uv run --frozen python scripts/docs_index_query.py "lode-mps0") for why a
+# (grep -rn "lode-mps0" docs/) for why a
 # dirty baseline reformat is gate-could-not-run, never committed invisibly
 # or discarded. `nox -t everything-else` needs neither check -- every
 # session in that bucket (shellcheck/linkcheck/docstringcheck/docs) is a

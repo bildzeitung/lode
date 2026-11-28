@@ -601,11 +601,6 @@
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "docs-index-before-grep",
-    "phrase": "try the lookup index first"
-  },
-  {
-    "file": ".claude/agents/coding.md",
     "rule": "trace-claimed-mechanism-in-decisions",
     "phrase": "I write the failure mechanism the ticket claims only after tracing it in the code"
   },

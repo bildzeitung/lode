@@ -8080,6 +8080,16 @@ one is taken, B: the retire condition rests on it.
     - **Proposal A.** Its optional "print the `sed -n` line" is dropped: it would raise the follow
       rate by design. The zero-hit message checks a local `git grep` of `trunk` as well as `bd`,
       since a stale worktree base is the likely cause of the zero-hit lookups above.
+  - **Update (lode-nsq11, maintainer ruling 2026-11-28 on lode-13i8j):** the index is RETIRED. The
+    corrected id-less pointer-follow rate (45%, 27 of 60) is below the 50% line ruled above, and
+    the maintainer confirmed the retire. Removed: the `docs_index_*.py` scripts (query, build,
+    chunker, loader, log, usage report), `scripts/decisions_lookup_baseline.py` (it built on the
+    usage report), their tests, `docs/docs-index.md` and its `@import` in `CLAUDE.md`, and the
+    "Docs lookup index" section of `docs/agents-workflow.md`. `CLAUDE.md` and the agent files now
+    point at `grep` over `docs/`. The gate in `tests/test_decisions_supersession_markers.py`
+    against an Update marker the index would cut off from its entry is removed with the chunker
+    it keyed on. Proposals A and B of this entry are moot; the entries above stay as the
+    historical record, and their `docs_index_query.py` pointers no longer run.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 

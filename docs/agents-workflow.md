@@ -57,13 +57,6 @@ decisions settle into `docs/` and beads; only then does code get written (see
 
 ---
 
-## Docs lookup index (`lode-t6o1`)
-
-- The docs-index rule, command, output contract, and AND→OR fallback are single-sourced in
-  [`docs/docs-index.md`](docs-index.md) (`@import`ed by `CLAUDE.md`) — not repeated here.
-
----
-
 ## The design loop — `challenge`
 
 `challenge` is a single, non-looping pass whose only job is to **argue with the plan**. You give it
@@ -426,11 +419,11 @@ Two rules, three message texts:
   classifier looks for the shell builtin `eval` by *shape*, and over-matches: any shell word whose
   text, case-insensitively and after quote removal, is `eval` or ends in a path segment `eval` is
   refused, wherever it sits in the command. Refused: `nox -s eval`, `ls lode/eval`, `ls lode/eval/`,
-  `grep -i 'eval' f`, `echo Eval`, `echo lode/eval`, `scripts/docs_index_query.py "eval"`. Accepted:
+  `grep -i 'eval' f`, `echo Eval`, `echo lode/eval`, `scripts/tool.py "eval"`. Accepted:
   `evaluate`, `retrieval`, `eval_x`, `tests/test_eval_live.py`, `lode/eval/x` (the segment is not
   last), `--session=eval`, and `eval` embedded in a larger quoted string (`echo "x eval y"`,
-  `scripts/docs_index_query.py "eval harness"`). Every 2.1.325 observation reproduced on 2.1.326,
-  which added the trailing-slash and bare-word docs-index cases. Impact: `nox -s eval` is refused as
+  `scripts/tool.py "eval harness"`). Every 2.1.325 observation reproduced on 2.1.326,
+  which added the trailing-slash and bare-word cases. Impact: `nox -s eval` is refused as
   written. (`--session=eval` getting through is a gap in the over-match, not a workaround this
   section relies on.)
 - **"too complex to verify"** — "… but this command names git in a form too complex to verify that it
@@ -730,7 +723,7 @@ rescue branch matters, why `origin/trunk` and never bare `trunk`, why the `case`
 fails to reach the agent that needs it, right when it needs it, outweighs the drift cost of three
 copies. `docs/decisions.md`'s three re-narrations of the same material carried no such argument —
 nothing reads `decisions.md` immediately before a destructive command — so those were trimmed to
-decision-timeline pointers instead (`uv run --frozen python scripts/docs_index_query.py "lode-zt62"`).
+decision-timeline pointers instead (`grep -rn "lode-zt62" docs/`).
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
 state (`.claude/skills/code/rebase-pickup.md` step 2, `code-reviewer.md` step 2) — never a reason to avoid the
@@ -780,7 +773,7 @@ fix now closes both:** `land-review`'s correctness exposure to a recycled worktr
 regardless (unchanged from above — it never checks anything out), and this was, and remains, purely a
 worktree-**leak** fix on that role. Full reasoning, including the two runner-up options considered and
 why the unconditional-clean shape won: [docs/decisions.md](decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Full account of the guard sites:
+(`grep -rn "lode-3v1p" docs/`). Full account of the guard sites:
 [land-review.md](../.claude/agents/land-review.md),
 [coding.md](../.claude/agents/coding.md),
 [rebase-pickup.md](../.claude/skills/code/rebase-pickup.md),
@@ -907,7 +900,7 @@ roles. As a result, `code/SKILL.md`'s call-site `isolation: "worktree"` option f
 Full probe detail, both runs' results, and the two explicit limits on what this licenses — the
 contrast is between *whole* agent definitions rather than a single-variable ablation of the key, and
 the load was light — are in [`docs/decisions.md`](decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-09td"`).
+(`grep -rn "lode-09td" docs/`).
 
 **Root cause: still not fully determinable from this repo — the sufficiency question is closed, the
 fan-out question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
@@ -1082,7 +1075,7 @@ as `lode-p8zl` — which escalated both questions for a maintainer ruling and th
 attempt to disambiguate subagent from main session — the payload cannot support that), returning
 `permissionDecision: "ask"` rather than `"deny"` when `HEAD` is `trunk`, and needing no `jq`. Full
 rulings and rationale: [`docs/decisions.md`](decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-p8zl"`).
+(`grep -rn "lode-p8zl" docs/`).
 
 The Bash-side counterpart is `scripts/trunk-bash-guard.sh` (lode-21sxk), a fourth `PreToolUse(Bash)`
 hook that asks the same way when a command runs `git commit`, `git merge`, `git push`, `git rebase`,
@@ -1095,7 +1088,7 @@ the prompt too. Accepted limit: while the lock is live, any other agent whose cw
 `trunk` is exempt too, and a pass that dies without releasing leaves the lock live until it ages
 out. Both hooks also ask while a rebase of `trunk` is stopped: `HEAD` is detached then, so they
 read the branch from the rebase's `head-name` (lode-3cxzs). Full ruling:
-[`docs/decisions.md`](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-21sxk"`).
+[`docs/decisions.md`](decisions.md) (`grep -rn "lode-21sxk" docs/`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
 
@@ -1192,7 +1185,7 @@ blocks in the skill markdown under `.claude/skills/` print the identical "GATE C
 on a machine/checkout fault and then exit 1 rather than 2 — this is correct, not an inconsistency with
 the convention above, and the call sites are not to be changed. The canonical statement of why lives in
 `scripts/gate-lib.sh`'s own header
-(`uv run --frozen python scripts/docs_index_query.py "lode-vmnx"`): the exit-2 convention exists for a
+(`grep -rn "lode-vmnx" docs/`): the exit-2 convention exists for a
 **calling script** to classify a subprocess's exit code programmatically; an agent-executed skill
 fence has no calling script, only the agent itself reading the stderr banner directly, so the
 distinction `gate-lib.sh` enforces doesn't apply there.
@@ -2926,7 +2919,7 @@ suppressed for such a row (a human has already seen it, by construction — defe
 hidden from `bd ready`, so nothing can re-escalate one without a human touching it first), but the
 report still lists it, annotated `(deferred)`, alongside its unconditional appearance in the
 deferred-ticket section. Full rationale, including the accepted un-defer residual, in
-[decisions.md](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-o7ai"`).
+[decisions.md](decisions.md) (`grep -rn "lode-o7ai" docs/`).
 
 ---
 
@@ -3474,7 +3467,7 @@ no-op on a genuinely fresh worktree and clears exactly the leftover dirt on an u
 nothing dirty behind either way. Full reasoning for why unconditional-clean was chosen over the other
 two options on the table (having the sweep judge recycling-dirt separately, or asserting a clean tree
 after the guard as a distinct step): [docs/decisions.md](decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`).
+(`grep -rn "lode-3v1p" docs/`).
 
 This is purely a worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree
 was, and remains, nil, since it never reads anything from the checked-out state regardless of what
@@ -3501,7 +3494,7 @@ nothing in the system ever revisits it, and its ~100MB worktree (dominated by a 
 mostly hardlinked, so `du -sh` on one worktree wildly overstates what removing it actually frees)
 leaks forever. Measured on the landing machine: 8 of 14–18 worktree directories in this bucket.
 Human decision, and the full measurement/verification trail: [docs/decisions.md](decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-yrtu"`). In short:
+(`grep -rn "lode-yrtu" docs/`). In short:
 
 - **Chosen: widen `/land`'s existing Section 4 sweep** (not a new `/gc` entry point, not `/sweep`
   with a charter amendment — both considered and rejected, reasons in decisions.md).
