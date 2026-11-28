@@ -13,13 +13,15 @@ module as a sibling to name the head of a superseded hit's chain.
 
 from __future__ import annotations
 
+import graphlib
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
+
+app = typer.Typer(add_completion=False)
 
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "docs" / "decisions"
 _NAME_RE = re.compile(r"^([0-9a-z]{5})-.+\.md$")
@@ -57,9 +59,9 @@ def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
         if path.name == "README.md":
             continue
         meta = parse_frontmatter(path.read_text(encoding="utf-8"))
-        name_id = m.group(1) if (m := _NAME_RE.match(path.name)) else None
+        name = _NAME_RE.match(path.name)
         entry_id = meta.get("id")
-        if name_id is None or entry_id != name_id:
+        if not name or entry_id != name.group(1):
             problems.append(f"{path.name}: id {entry_id!r} does not match filename")
             continue
         if entry_id in entries:
@@ -98,22 +100,6 @@ def chain_head(entries: dict[str, dict], entry_id: str) -> str:
     return entry_id
 
 
-def _has_cycle(entries: dict[str, dict]) -> bool:
-    state: dict[str, int] = {}  # 1 = on the DFS stack, 2 = done
-
-    def visit(node: str) -> bool:
-        if state.get(node) == 1:
-            return True
-        if state.get(node) == 2 or node not in entries:
-            return False
-        state[node] = 1
-        found = any(visit(old) for old in entries[node]["supersedes"])
-        state[node] = 2
-        return found
-
-    return any(visit(node) for node in entries)
-
-
 def check_edges(directory: Path) -> list[str]:
     entries, problems = load_entries(directory)
     for entry in entries.values():
@@ -123,8 +109,11 @@ def check_edges(directory: Path) -> list[str]:
                 for t in entry[key]
                 if t not in entries
             ]
-    if _has_cycle(entries):
-        problems.append("supersedes cycle")
+    graph = {entry_id: entry["supersedes"] for entry_id, entry in entries.items()}
+    try:
+        graphlib.TopologicalSorter(graph).prepare()
+    except graphlib.CycleError as exc:
+        problems.append(f"supersedes cycle: {' -> '.join(exc.args[1])}")
     return problems
 
 
@@ -140,9 +129,7 @@ def check_immutable(directory: Path, base: str) -> list[str]:
         [*git, "merge-base", base, "HEAD"], capture_output=True, text=True, check=False
     )
     if fork.returncode:
-        print(
-            f"GATE COULD NOT RUN: no merge base of {base!r} and HEAD", file=sys.stderr
-        )
+        typer.echo(f"GATE COULD NOT RUN: no merge base of {base!r} and HEAD", err=True)
         raise typer.Exit(2)
     # ``-z``: without it git quotes a non-ASCII path, which would then fail
     # the ``.md`` test below and go unchecked.
@@ -157,6 +144,7 @@ def check_immutable(directory: Path, base: str) -> list[str]:
     ]
 
 
+@app.command()
 def main(
     directory: Annotated[Path, typer.Option(help="Entry directory.")] = DEFAULT_DIR,
     base: Annotated[
@@ -165,7 +153,7 @@ def main(
 ) -> None:
     """Check the decision entries' edges and that committed entries are unchanged."""
     if not directory.is_dir():
-        raise typer.Exit(0)
+        return
     edges = check_edges(directory)
     # Printed before the immutability check runs: its exit 2 must not discard them.
     print(*edges, sep="\n", end="\n" if edges else "")
@@ -175,4 +163,4 @@ def main(
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()

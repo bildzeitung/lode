@@ -73,6 +73,11 @@ _ENTRY_LOG_STEM = "decisions"
 #: is one unit, and :func:`chunk_corpus` indexes it alongside ``docs/*.md``.
 _ENTRY_DIR_NAME = "decisions"
 
+#: The files :func:`chunk_corpus` indexes, as globs relative to the docs
+#: directory. Public so that ``scripts/docs_index_query.py`` probes the same
+#: files on ``origin/trunk`` without keeping a second copy of the list.
+CORPUS_GLOBS = ("*.md", f"{_ENTRY_DIR_NAME}/*.md")
+
 #: The heading level of the entry log's sections: the cap on its split level
 #: (``lode-kys3``) and the level :func:`heading_sections` reports.
 _ENTRY_LOG_SECTION_LEVEL = 2
@@ -173,6 +178,12 @@ def _bullet_boundary(
     return is_bullet
 
 
+def is_entry_file(path: Path | str) -> bool:
+    """Is ``path`` a file of the per-entry decision directory? Public so that
+    ``scripts/docs_index_query.py`` asks the same question the chunker does."""
+    return Path(path).parent.name == _ENTRY_DIR_NAME
+
+
 def is_structural_line(line: str) -> bool:
     """Is ``line`` an ATX heading of any level, or a top-level ``- `` bullet?
 
@@ -268,7 +279,7 @@ def _ranges(
     if n == 0:
         return [], []
     fence_flags = _fence_flags(lines)
-    if Path(path).parent.name == _ENTRY_DIR_NAME:
+    if is_entry_file(path):
         # One entry file is one retrievable unit, headings inside it included.
         return _hard_split(lines, fence_flags, 1, n, try_bullet=False), []
     split_level = _deepest_heading_level(lines, fence_flags)
@@ -395,12 +406,11 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
 
 def chunk_corpus(docs_dir: Path | str) -> list[Unit]:
-    """Chunk every ``*.md`` file directly under ``docs_dir`` and under its
-    ``decisions/`` subdirectory, sorted by name."""
+    """Chunk every file of ``docs_dir`` that :data:`CORPUS_GLOBS` matches: the
+    ``*.md`` files directly under it and under its ``decisions/`` subdirectory,
+    sorted by path."""
     docs_dir = Path(docs_dir)
     units: list[Unit] = []
-    for md_path in sorted(
-        [*docs_dir.glob("*.md"), *(docs_dir / _ENTRY_DIR_NAME).glob("*.md")]
-    ):
+    for md_path in sorted(p for g in CORPUS_GLOBS for p in docs_dir.glob(g)):
         units.extend(chunk_file(md_path, md_path.read_text(encoding="utf-8")))
     return units

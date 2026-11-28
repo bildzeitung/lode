@@ -273,13 +273,19 @@ _ID_CHECK_TIMEOUT_S = 5
 _TRUNK_REF = "origin/trunk"
 
 
-def superseded_head(path: str) -> str | None:
+def superseded_head(path: str, loaded: dict[Path, dict]) -> str | None:
     """The path of the chain head when ``path`` is a superseded decision entry
-    file under a ``decisions/`` directory, else ``None`` (``lode-ebayj.2``)."""
+    file, else ``None`` (``lode-ebayj.2``).
+
+    ``loaded`` holds each entry directory already read, so that a run of hits
+    in one directory reads its files once.
+    """
     entry_path = Path(path)
-    if entry_path.parent.name != "decisions":
+    if not _build._chunker.is_entry_file(entry_path):
         return None
-    entries, _ = _entries.load_entries(entry_path.parent)
+    if entry_path.parent not in loaded:
+        loaded[entry_path.parent] = _entries.load_entries(entry_path.parent)[0]
+    entries = loaded[entry_path.parent]
     entry_id = entry_path.name.split("-", 1)[0]
     if entry_id not in entries:
         return None
@@ -315,9 +321,9 @@ def zero_hit_id_note(raw_query: str) -> str | None:
     bd_id = raw_query.strip()
     if not _BD_ID.fullmatch(bd_id):
         return None
-    # ``-w`` and the two non-recursive pathspecs hold this probe to what the
-    # index matches: a whole id, in the files ``chunk_corpus`` chunks.
-    pathspecs = [":(glob)docs/*.md", ":(glob)docs/decisions/*.md"]
+    # ``-w`` and the chunker's own globs hold this probe to what the index
+    # matches: a whole id, in the files it chunks.
+    pathspecs = [f":(glob)docs/{glob}" for glob in _build._chunker.CORPUS_GLOBS]
     grep = _run(
         ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", *pathspecs]
     )
@@ -449,12 +455,13 @@ def main(
     elapsed_ms = (time.perf_counter() - start) * 1000
     fallback_fired = False
     if results:
+        entry_dirs: dict[Path, dict] = {}
         for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
             fallback_fired = fallback_fired or used_fallback
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
-            head = superseded_head(path)
+            head = superseded_head(path, entry_dirs)
             if head:
                 print(f"    NOTE: superseded; read the chain head instead: {head}")
             markers = split_entry_markers(path, line_lo, line_hi)

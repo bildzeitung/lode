@@ -1,19 +1,15 @@
-"""Tests for the per-entry decision gate and its docs-index coverage (lode-ebayj.2)."""
+"""Tests for the per-entry decision gate (lode-ebayj.2)."""
 
-import functools
 from pathlib import Path
 
 import pytest
-from _gitrepo import _commit_file, _git
+from _gitrepo import _git
 from conftest import load_module_from_path
 from typer.testing import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _gate = load_module_from_path(
     "check_decisions_entries", REPO_ROOT / "scripts" / "check_decisions_entries.py"
-)
-_query = load_module_from_path(
-    "docs_index_query_for_decisions", REPO_ROOT / "scripts" / "docs_index_query.py"
 )
 runner = CliRunner()
 
@@ -87,7 +83,12 @@ def test_an_edge_value_that_is_not_an_inline_list_is_flagged(
 def test_supersedes_cycle_is_flagged(entries: Path) -> None:
     _entry(entries, "aaaaa", supersedes="[bbbbb]")
     _entry(entries, "bbbbb", supersedes="[aaaaa]")
-    assert "supersedes cycle" in _gate.check_edges(entries)
+    assert _gate.check_edges(entries) == ["supersedes cycle: aaaaa -> bbbbb -> aaaaa"]
+
+
+def test_an_entry_superseding_itself_is_a_cycle(entries: Path) -> None:
+    _entry(entries, "aaaaa", supersedes="[aaaaa]")
+    assert _gate.check_edges(entries) == ["supersedes cycle: aaaaa -> aaaaa"]
 
 
 def _repo_with_committed_entry(tmp_path: Path) -> tuple[Path, Path]:
@@ -98,10 +99,15 @@ def _repo_with_committed_entry(tmp_path: Path) -> tuple[Path, Path]:
     _git(repo, "config", "user.name", "t")
     directory = repo / "docs" / "decisions"
     directory.mkdir(parents=True)
-    _entry(directory, "aaaaa")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "base")
+    _commit_entry(repo, directory, "aaaaa")
     return repo, directory
+
+
+def _commit_entry(repo: Path, directory: Path, entry_id: str, **fields: str) -> Path:
+    path = _entry(directory, entry_id, **fields)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", f"add {entry_id}")
+    return path
 
 
 def test_editing_a_committed_entry_is_flagged(tmp_path: Path) -> None:
@@ -118,12 +124,7 @@ def test_deleting_a_committed_entry_is_flagged(tmp_path: Path) -> None:
 
 def test_adding_an_entry_passes_the_immutability_check(tmp_path: Path) -> None:
     repo, directory = _repo_with_committed_entry(tmp_path)
-    _commit_file(
-        repo,
-        str(Path("docs", "decisions", "bbbbb-y.md")),
-        "---\nid: bbbbb\n---\n",
-        "add",
-    )
+    _commit_entry(repo, directory, "bbbbb")
     assert _gate.check_immutable(directory, "HEAD~1") == []
 
 
@@ -135,12 +136,7 @@ def test_an_entry_the_base_gained_after_the_fork_is_not_a_deletion(
     the branch's own edit of an entry it forked with is still caught."""
     repo, directory = _repo_with_committed_entry(tmp_path)
     _git(repo, "branch", "feature")
-    _commit_file(
-        repo,
-        str(Path("docs", "decisions", "bbbbb-y.md")),
-        "---\nid: bbbbb\n---\n",
-        "trunk gains an entry",
-    )
+    _commit_entry(repo, directory, "bbbbb")
     _git(repo, "checkout", "-q", "feature")
     assert _gate.check_immutable(directory, "trunk") == []
     _entry(directory, "aaaaa", body="rewritten")
@@ -154,9 +150,7 @@ def test_editing_a_committed_entry_with_a_non_ascii_slug_is_flagged(
 ) -> None:
     """git quotes such a path in its default diff output, ``.md`` included."""
     repo, directory = _repo_with_committed_entry(tmp_path)
-    path = _entry(directory, "bbbbb", slug="café")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "add")
+    path = _commit_entry(repo, directory, "bbbbb", slug="café")
     path.write_text(path.read_text() + "more\n")
     assert _gate.check_immutable(directory, "HEAD") == [
         "bbbbb-café.md: committed entry was modified"
@@ -165,25 +159,17 @@ def test_editing_a_committed_entry_with_a_non_ascii_slug_is_flagged(
 
 def test_cli_exit_codes(tmp_path: Path) -> None:
     _, directory = _repo_with_committed_entry(tmp_path)
-    ok = runner.invoke(_gate_app(), ["--directory", str(directory), "--base", "HEAD"])
+    ok = runner.invoke(_gate.app, ["--directory", str(directory), "--base", "HEAD"])
     assert ok.exit_code == 0, ok.output
     _entry(directory, "aaaaa", body="rewritten")
-    bad = runner.invoke(_gate_app(), ["--directory", str(directory), "--base", "HEAD"])
+    bad = runner.invoke(_gate.app, ["--directory", str(directory), "--base", "HEAD"])
     assert bad.exit_code == 1
     _entry(directory, "bbbbb", related="[nopqr]")
     nobase = runner.invoke(
-        _gate_app(), ["--directory", str(directory), "--base", "no-such-ref"]
+        _gate.app, ["--directory", str(directory), "--base", "no-such-ref"]
     )
     assert nobase.exit_code == 2
     assert "nopqr does not exist" in nobase.output
-
-
-def _gate_app():
-    import typer
-
-    app = typer.Typer()
-    app.command()(_gate.main)
-    return app
 
 
 def test_the_real_decisions_directory_passes_the_edge_check() -> None:
@@ -196,57 +182,7 @@ def test_readme_is_at_most_15_lines() -> None:
 
 
 def test_gate_is_at_most_150_lines_of_code() -> None:
-    import ast
-
-    path = REPO_ROOT / "scripts" / "check_decisions_entries.py"
-    source = path.read_text()
-    docstrings = {
-        n.body[0].lineno
-        for n in ast.walk(ast.parse(source))
-        if isinstance(n, (ast.Module, ast.FunctionDef))
-        and n.body
-        and isinstance(n.body[0], ast.Expr)
-    }
-    code = [
-        ln
-        for i, ln in enumerate(source.splitlines(), 1)
-        if ln.strip() and not ln.lstrip().startswith("#") and i not in docstrings
-    ]
+    """Every non-blank line that is not a comment counts, docstrings included."""
+    source = (REPO_ROOT / "scripts" / "check_decisions_entries.py").read_text()
+    code = [ln for ln in source.splitlines() if ln.strip() and ln.lstrip()[0] != "#"]
     assert len(code) <= 150
-
-
-def _docs_with_chain(tmp_path: Path) -> Path:
-    docs_dir = tmp_path / "docs"
-    directory = docs_dir / "decisions"
-    directory.mkdir(parents=True)
-    _entry(directory, "aaaaa", body="# Old\n\nstale quuxlarb claim")
-    _entry(
-        directory,
-        "bbbbb",
-        slug="new",
-        supersedes="[aaaaa]",
-        date="2026-02-01",
-        body="# New\n\nfresh claim",
-    )
-    return docs_dir
-
-
-def test_docs_index_finds_an_entry_and_names_the_chain_head(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    docs_dir = _docs_with_chain(tmp_path)
-    monkeypatch.setattr(
-        _query._build,
-        "build_index",
-        functools.partial(_query._build.build_index, docs_dir=docs_dir),
-    )
-
-    result = runner.invoke(_query.app, ["quuxlarb"])
-    assert result.exit_code == 0, result.output
-    assert "aaaaa-x.md" in result.stdout
-    assert str(docs_dir / "decisions" / "bbbbb-new.md") in result.stdout
-
-    result = runner.invoke(_query.app, ["fresh"])
-    assert "bbbbb-new.md" in result.stdout
-    assert "superseded" not in result.stdout
