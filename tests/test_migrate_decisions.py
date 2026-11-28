@@ -30,6 +30,15 @@ DROP = _mig.Override(
 )
 
 
+@pytest.fixture(autouse=True)
+def _fixture_new_entry_bullets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _mig,
+        "NEW_ENTRY_BULLETS",
+        (("Update (lode-ggg1", "a correction filed as its own entry"),),
+    )
+
+
 def _text() -> str:
     return FIXTURE.read_text(encoding="utf-8")
 
@@ -56,7 +65,6 @@ def test_splits_on_column_zero_bullets_and_sections_outside_fences() -> None:
         "bullet",
         "bullet",
         "section",
-        "bullet",
         "section",
         "bullet",
         "section",
@@ -64,6 +72,25 @@ def test_splits_on_column_zero_bullets_and_sections_outside_fences() -> None:
     fenced = next(e for e in entries if "Fenced example" in e.title)
     assert "- **not an entry**" in "".join(fenced.lines)
     assert "## not a section either" in "".join(fenced.lines)
+
+
+def test_a_sub_point_bullet_joins_its_section_and_a_listed_bullet_does_not() -> None:
+    _, entries = _mig.split_entries(_text())
+    first = next(e for e in entries if "First section" in e.title)
+    assert "A bullet inside the section (lode-eee3)" in "".join(first.lines)
+    assert not any("lode-eee3" in e.title for e in entries)
+    assert any(e.title.startswith("Update (lode-ggg1") for e in entries)
+    assert "lode-ggg1" not in "".join(
+        next(e for e in entries if "Second section" in e.title).lines
+    )
+
+
+def test_the_real_new_entry_list_gives_a_reason_per_row() -> None:
+    real = load_module_from_path(
+        "migrate_decisions_real", REPO_ROOT / "scripts" / "migrate_decisions.py"
+    )
+    assert len(real.NEW_ENTRY_BULLETS) == 2
+    assert all(prefix and reason for prefix, reason in real.NEW_ENTRY_BULLETS)
 
 
 def test_bodies_concatenate_to_the_source_minus_the_preamble() -> None:
@@ -290,7 +317,7 @@ def test_cli_writes_entries_and_mapping_and_prints_the_report(
     assert "line 13: open (no Update)" in result.output
     # A date found past the title is listed as a guess.
     assert "line 10: 2026-02-03 (first paragraph)" in result.output
-    assert len(list(target.glob("*.md"))) == 9
+    assert len(list(target.glob("*.md"))) == 8
     assert json.loads(mapping.read_text())
 
 

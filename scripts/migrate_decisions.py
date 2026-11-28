@@ -108,22 +108,19 @@ class Override:
 
 
 # The lode-d3snk Update was appended under the lode-fg7w7.3 section by mistake;
-# it corrects the lode-yt7q2 entry just before it. A column-zero bullet inside
-# a ``## `` section is an entry of its own, so the unit it corrects is the last
-# of that section, the "Still missed" bullet (lode-k813a), which is also where
-# one lode-htkr3 pointer sits. Both pointers only say the d3snk Update is
-# misfiled and are obsolete once it is moved. The third lode-htkr3 Update
-# (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
+# it corrects the lode-yt7q2 entry just before it. Both lode-htkr3 pointers only
+# say the d3snk Update is misfiled (one sits in the lode-yt7q2 entry, one in the
+# lode-fg7w7.3 section) and are obsolete once it is moved. The third lode-htkr3
+# Update (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
 OVERRIDES: tuple[Override, ...] = (
     Override(
         "lode-fg7w7.3",
         "**Update (lode-d3snk, 2026-11-27):**",
-        "answers the 'Still missed' bullet of the lode-yt7q2 entry, per the "
-        "lode-htkr3 pointer",
-        target="lode-k813a",
+        "answers the lode-yt7q2 entry, per the lode-htkr3 pointer",
+        target="lode-yt7q2",
     ),
     Override(
-        "lode-k813a",
+        "lode-yt7q2",
         "**Update (lode-htkr3, 2026-11-27):**",
         "pointer to the misfiled lode-d3snk Update, obsolete once it is moved",
     ),
@@ -178,8 +175,32 @@ def _title(kind: str, lines: list[str]) -> str:
     return " ".join((joined[:end] if end != -1 else lines[0][4:]).split())
 
 
+# Column-zero bullets that follow a ``## `` section but are entries of their own,
+# not its sub-points (lode-pqhhx Q1=B). Every other bullet that follows a section,
+# up to the next entry start, is part of the section's entry. Matched as a prefix
+# of the bullet's title; reviewed like OVERRIDES.
+NEW_ENTRY_BULLETS: tuple[tuple[str, str], ...] = (
+    (
+        "/land SKILL.md does not carry a",
+        "its own decision, follows the lode-sflg section without belonging to it",
+    ),
+    (
+        "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut",
+        "its own decision (lode-w18a.10), follows the lode-sflg section",
+    ),
+)
+
+
+def _is_new_entry_bullet(title: str) -> bool:
+    return any(title.startswith(prefix) for prefix, _reason in NEW_ENTRY_BULLETS)
+
+
 def split_entries(text: str) -> tuple[int, list[Entry]]:
-    """``(preamble line count, entries)`` for a decisions.md text."""
+    """``(preamble line count, entries)`` for a decisions.md text.
+
+    A ``## `` section and the column-zero bullets after it form one entry, except
+    a bullet named in NEW_ENTRY_BULLETS, which starts an entry of its own.
+    """
     lines = text.splitlines(keepends=True)
     inside = fence_flags(lines)
     starts = [
@@ -193,7 +214,16 @@ def split_entries(text: str) -> tuple[int, list[Entry]]:
     entries = []
     for lo, hi in pairwise(bounds):
         kind = "section" if lines[lo].startswith("## ") else "bullet"
-        entries.append(Entry(kind, lo + 1, _title(kind, lines[lo:hi]), lines[lo:hi]))
+        title = _title(kind, lines[lo:hi])
+        if (
+            kind == "bullet"
+            and entries
+            and entries[-1].kind == "section"
+            and not _is_new_entry_bullet(title)
+        ):
+            entries[-1].lines.extend(lines[lo:hi])
+            continue
+        entries.append(Entry(kind, lo + 1, title, lines[lo:hi]))
     return starts[0], entries
 
 
