@@ -59,6 +59,8 @@ def _cells(strip: Strip) -> list[tuple[str, Style]]:
 
 
 TEXT = "# Title\nbody\t\n\n```\nx\t\n```\n[a]()\ntrail  x  \n"
+#: One line that soft-wraps into several rows at width 40, then an empty line.
+WRAPPED = "word " * 60 + "[a]() tail\t\n"
 
 
 @_sync
@@ -155,11 +157,50 @@ async def test_one_fence_scan_per_render_pass(monkeypatch) -> None:
 
 
 @_sync
+async def test_one_lint_per_line_per_render_pass(monkeypatch) -> None:
+    fetched = 0
+    linted: list[int] = []
+    passes: list[tuple[int, list[int]]] = []
+
+    def counting_lint_line(lines, index, flags, cursor):
+        linted.append(index)
+        return lint_line(lines, index, flags, cursor)
+
+    monkeypatch.setattr(lint_text_area, "lint_line", counting_lint_line)
+
+    class Counting(LintTextArea):
+        def render_lines(self, crop: Region) -> list[Strip]:
+            before = fetched, len(linted)
+            try:
+                return super().render_lines(crop)
+            finally:
+                passes.append((fetched - before[0], linted[before[1] :]))
+
+        def get_line(self, line_index: int) -> Text:
+            nonlocal fetched
+            fetched += 1
+            return super().get_line(line_index)
+
+    app = _App(Counting, WRAPPED, soft_wrap=True)
+    async with app.run_test(size=(40, 20)) as pilot:
+        await pilot.pause()
+        area = app.query_one(Counting)
+        # Outside a pass nothing is kept.
+        seen = len(linted)
+        area.get_line(0)
+        area.get_line(0)
+        assert linted[seen:] == [0, 0]
+    # Per pass, not one global list: a cursor blink starts another pass.
+    assert any(rows > len(lints) > 0 for rows, lints in passes)
+    assert all(len(lints) == len(set(lints)) for _, lints in passes)
+
+
+@_sync
 async def test_soft_wrap_long_line() -> None:
     app = _App(soft_wrap=True)
     async with app.run_test(size=(40, 20)) as pilot:
         area = app.query_one(LintTextArea)
-        area.load_text("word " * 60 + "[a]() tail\t\n")
+        area.load_text(WRAPPED)
         area.cursor_location = (1, 0)
         await pilot.pause()
         got = _underlined(area, 0)
@@ -237,12 +278,12 @@ async def test_perf_2000_lines() -> None:
         await pilot.pause()
         n = len(area.document.lines)
         assert n >= 2000
-        # What render_lines sets around a pass: without it every get_line
-        # rescans the fences, which is not what a redraw costs.
-        area.lint_in_render_pass = True
         best = float("inf")
         for _ in range(5):
             area.lint_fence_flags = None
+            # What render_lines sets around a pass: without it every get_line
+            # rescans the fences, which is not what a redraw costs.
+            area.lint_ranges = {}
             t0 = time.perf_counter()
             for i in range(n):
                 area.get_line(i)

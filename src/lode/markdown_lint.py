@@ -90,7 +90,7 @@ def lint_line_tagged(
         found.append(("MD009", run_start, len(line)))
 
     # Both inline rules need one of these; most lines have neither, and this
-    # runs once per drawn row.
+    # runs for every line a repaint draws.
     if "\t" in line or "](" in line:
         masked = _mask_inline(line)
         if "\t" in masked:
