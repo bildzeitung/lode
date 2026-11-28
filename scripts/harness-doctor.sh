@@ -65,6 +65,7 @@ echo "guard scripts"
 # script FAILS OPEN -- the guard silently stops guarding and nothing anywhere says
 # so. That one is invisible without a check like this.
 required_scripts="
+scripts/start-guards.sh
 scripts/isolation-guard.sh
 scripts/recycled-worktree-guard.sh
 scripts/assert-main-checkout.sh
