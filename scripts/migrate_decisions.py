@@ -27,8 +27,8 @@ title and every status derived from open wording:
 
 - ``id``: random, 5 lowercase base36 characters, unique within the run
   (``--seed`` makes a run repeatable).
-- ``date``: the first ISO date in the entry's title, else in its first
-  paragraph, else anywhere in the entry, else the nearest dated entry's date.
+- ``date``: the ISO date in the entry's title, else the ``git blame -M -C``
+  author date (UTC) of its first line. The run fails when blame is unavailable.
 - ``status``: ``decided`` or ``open`` from the title's and first paragraph's
   wording (deferred, leaning, revisit, tune when are open); an Update marker
   that reads as a ruling turns an open entry decided. Both kinds of wording in
@@ -47,7 +47,9 @@ from __future__ import annotations
 import json
 import random
 import re
+import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Annotated
@@ -64,6 +66,14 @@ _MARKER_RE = re.compile(r"\*\*Update \(")
 _MARKER_LINE_RE = re.compile(r"^\s*(?:- )?\*\*Update \(")
 _MARKER_ID_RE = re.compile(r"\*\*Update \(`?(lode-[\w.]*\w)")
 _ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# First line of a --line-porcelain record: sha, original line, final line.
+_BLAME_HEADER_RE = re.compile(r"^([0-9a-f]{40}) \d+ (\d+)")
+
+
+class BlameUnavailable(RuntimeError):
+    """Blame dates are needed and cannot be had; the run must not guess."""
+
+
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _ID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
 _SLUG_MAX = 60
@@ -345,38 +355,54 @@ def apply_overrides(
     return applied
 
 
-def _first_paragraph(entry: Entry) -> str:
-    out = []
-    for line in entry.lines:
-        if not line.strip():
-            break
-        out.append(line)
-    return "".join(out)
+def derive_date(entry: Entry, blame: dict[int, tuple[str, str]] | None) -> None:
+    """The title's ISO date, else the blame date of the entry's first line."""
+    m = _ISO_DATE_RE.search(entry.title)
+    if m:
+        entry.date, entry.date_source = m.group(0), "title"
+        return
+    if blame is None:
+        raise BlameUnavailable(
+            f"entry at line {entry.start_line} has no title date and no blame dates "
+            "were supplied"
+        )
+    date, sha = blame[entry.start_line]
+    entry.date, entry.date_source = date, f"git blame -M -C, commit {sha[:10]}"
 
 
-def derive_date(entry: Entry) -> None:
-    for source, text in (
-        ("title", entry.title),
-        ("first paragraph", _first_paragraph(entry)),
-        ("body", "".join(entry.lines)),
-    ):
-        m = _ISO_DATE_RE.search(text)
-        if m:
-            entry.date, entry.date_source = m.group(0), source
-            return
+def git_blame_dates(source: Path) -> dict[int, tuple[str, str]]:
+    """Source line -> (author date in UTC, commit sha) from ``git blame -M -C``.
 
-
-def fill_missing_dates(entries: list[Entry]) -> None:
-    """An entry with no date anywhere takes the preceding entry's date; those
-    ahead of the first dated entry take that entry's."""
-    prev = next((e.date for e in entries if e.date), None)
-    if prev is None:
-        raise ValueError("no entry carries a date")
-    for entry in entries:
-        if entry.date:
-            prev = entry.date
-        else:
-            entry.date, entry.date_source = prev, "inferred from a neighbour"
+    Raises :class:`BlameUnavailable` when git or the repository is missing, the
+    file is untracked, or a line is uncommitted: a working-tree date would be
+    today's, not the line's.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "blame", "-M", "-C", "--line-porcelain", "--", source.name],
+            cwd=source.resolve().parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except OSError as exc:
+        raise BlameUnavailable(f"cannot run git: {exc}") from exc
+    if proc.returncode != 0:
+        raise BlameUnavailable(f"git blame {source} failed: {proc.stderr.strip()}")
+    dates: dict[int, tuple[str, str]] = {}
+    head = None
+    for line in proc.stdout.splitlines():
+        header = _BLAME_HEADER_RE.match(line)
+        if header:
+            head = (header.group(1), int(header.group(2)))
+        elif line.startswith("author-time ") and head:
+            sha, final = head
+            if set(sha) == {"0"}:
+                raise BlameUnavailable(f"line {final} of {source} is uncommitted")
+            when = datetime.fromtimestamp(int(line.split()[1]), tz=UTC)
+            dates[final] = (when.strftime("%Y-%m-%d"), sha)
+    return dates
 
 
 def _marker_texts(entry: Entry) -> list[str]:
@@ -554,6 +580,7 @@ def migrate(
     text: str,
     overrides: tuple[Override, ...] | None = None,
     rng: random.Random | None = None,
+    blame: dict[int, tuple[str, str]] | None = None,
 ) -> Result:
     preamble_lines, entries = split_entries(text)
     if not entries:
@@ -568,9 +595,8 @@ def migrate(
     handled = {a.source_line for a in result.applied}
     result.suspects = [row for line, row in suspects if line not in handled]
     for entry in entries:
-        derive_date(entry)
+        derive_date(entry, blame)
         derive_status(entry)
-    fill_missing_dates(entries)
     assign_names(entries, rng or random.SystemRandom())
     result.mapping = build_mapping(text, entries)
     return result
@@ -738,14 +764,14 @@ def render_report(
         f"({x.wording}): {x.title[:70]!r}"
         for x in differs
     ]
-    guessed = [x for x in e if x.date_source != "title"]
+    blamed = [x for x in e if x.date_source != "title"]
     out += [
         "",
-        f"DATES: {len(e) - len(guessed)} from the title; {len(guessed)} guessed:",
+        f"DATES: {len(e) - len(blamed)} from the title; {len(blamed)} from blame:",
     ]
     out += [
         f"  line {x.start_line}: {x.date} ({x.date_source}): {x.title[:60]!r}"
-        for x in guessed
+        for x in blamed
     ]
     if links is not None:
         out += [
@@ -775,10 +801,16 @@ def main(
     if target.exists() and any(target.iterdir()):
         typer.echo(f"{target} is not empty; refusing to write into it", err=True)
         raise typer.Exit(2)
-    result = migrate(
-        source.read_text(encoding="utf-8"),
-        rng=random.Random(seed) if seed is not None else None,
-    )
+    try:
+        blame = git_blame_dates(source)
+        result = migrate(
+            source.read_text(encoding="utf-8"),
+            rng=random.Random(seed) if seed is not None else None,
+            blame=blame,
+        )
+    except BlameUnavailable as exc:
+        typer.echo(f"blame dates unavailable: {exc}", err=True)
+        raise typer.Exit(2) from exc
     write_entries(target, result.entries)
     mapping_path = mapping or target.resolve().parent / f"{target.name}-mapping.json"
     mapping_path.write_text(
