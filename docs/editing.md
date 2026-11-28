@@ -37,8 +37,10 @@ immediately).
 **Colour depth is block-level only, not inline** — a scope decision, not a bug: **emphasis,
 strong, inline code spans, and inline links (`[text](url)`) are NOT coloured.** What *is*
 coloured: headings and heading markers, fenced/indented code and fence
-delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
-*reference-style* link definitions (`[label]: url` — not inline `[text](url)`).
+delimiters, list markers, thematic breaks, and the optional title of a *reference-style* link
+definition (`[label]: url "title"` — not inline `[text](url)`). Block-quote markers, backslash
+escapes, and the label and URL of a reference-link definition get no colour of their own; the
+palette below lists the unmapped captures.
 
 **The palette** (`NOTE_BODY_SYNTAX_STYLES` in `_markdown_area.py`, `lode-lab1`, retuned by
 `lode-dmbc`). The bundled grammar's captures are the complete menu of what *can* be coloured; lode
@@ -54,7 +56,9 @@ maps five of them:
 
 Unmapped, and left that way on purpose: `link.uri`, `link.label`,
 `punctuation.special` (block-quote markers, which the grammar emits as zero-width spans here),
-`string.escape`, and `none`. `none` is the load-bearing one — `lode-76go` found it is emitted
+`string.escape` (a backslash escape, which the block grammar sees inside a reference-link
+definition or a fence info string, not in running text), and `none`.
+`none` is the load-bearing one — `lode-76go` found it is emitted
 *after* `text.literal` in each line's highlight iteration order, so mapping it would win the colour
 attribute at render time and silently undo the code-block colour. The same ordering is used
 deliberately in the other direction for `punctuation.delimiter`, which lands after `text.literal`
@@ -65,7 +69,9 @@ and so dims the fence characters on top of the whole-line code span.
 the original `text.literal` colour was `magenta` (index 5), which is why it rendered harsh and why
 there was no way to soften it in place. The 256-colour names render consistently without requiring
 truecolor, so hex — which would have hardcoded a dark-background assumption — was not needed.
-Whether any of this should become user-configurable is open; see
+The table's five values are defaults that `[tui.theme.syntax]` can override (see the
+`[tui.theme]` row in [configuration.md](configuration.md#tui--theme-tuitheme-lode-cwyk)). The
+design record is the `lode-5zxt` entry ("User-configurable colour, revisited") in
 [decisions.md](decisions.md).
 
 **Why block-only.** `lode-ev5j.1`'s spike (verified against textual 8.2.8 + tree-sitter-markdown
@@ -181,8 +187,9 @@ items parked in editing.md") links to it and cannot be repointed. -->
 
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
 **editable** note bodies, updated as you type. **This section is the settled design, only partly
-shipped:** the rule engine is built (`src/lode/markdown_lint.py`, `lode-o7pf.2`), but the widget
-(`lode-o7pf.3`) and the wiring (`lode-o7pf.4`) are not, so no screen draws an underline yet. The
+shipped:** the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`) and the widget
+(`LintTextArea` in `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) are built, but the
+wiring (`lode-o7pf.4`) is not, so no screen draws an underline yet. The
 Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
@@ -220,7 +227,11 @@ not only an edit.
 `match_fence_marker`), the repo's one sanctioned CommonMark fence scanner. `fence_flags` is
 whole-buffer O(n), so its result is memoized for **one render pass**: built on the first `get_line`
 call of the pass and dropped when the pass ends (a `render_lines` override brackets a pass), so a
-repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Lines
+repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Only a
+pass keeps the memo: a `get_line` call outside one scans the fences itself and keeps nothing.
+Textual makes such calls (its mouse hit-testing calls `render_line` directly) and stores what they
+return in its line cache, and one can come after an edit and before the repaint, so flags kept from
+the last pass could put a wrong underline on screen until the next edit. Lines
 inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
 opener as outside, so the opener is checked with `match_fence_marker`).
 
@@ -248,6 +259,14 @@ a span that crosses a line break is not recognized in v1. A span inside a link's
 the link (``[`f()`]()`` is still flagged). Indented code blocks and fences inside a
 block quote are **not** exempt in v1 (`fence_flags` reports neither as a fence), so a hard tab in an
 indented code block is underlined. That false positive is accepted.
+
+**Escapes and nested brackets (`lode-k7mr6`).** A backslash escape outside a code span is
+honoured, as in CommonMark: an escaped backtick opens no span, an escaped bracket (`\[`, `\]`)
+delimits no link, and an escaped `!` marks no image (`\![x]()` is flagged). Inside a span a
+backslash is literal. Link text may hold one level of nested brackets: `[a[b]c]()` is flagged, and
+so is an image linked to nothing, `[![alt](src)]()`. A nested pair followed by `(` is read as a
+link of its own, because CommonMark lets no link hold another: `[a [b](url) c]()` is not flagged.
+Not recognized in v1: deeper nesting, and a backtick or bracket inside a link's destination.
 
 **Decided (`lode-kgg0h`, maintainer, 2026-11-27).** Four questions raised when this section was
 reviewed, now folded into the table and paragraphs above: MD009 skips the trailing run that ends at

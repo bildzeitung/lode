@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from lode.docs_slug import _INLINE_CODE_RE
 from lode.fence_parsing import match_fence_marker
 
 Range = tuple[int, int]
@@ -25,16 +24,45 @@ _EXTRA_SPACES_RE = re.compile(r" {2,}(?=\S)")
 #: Trailing whitespace plus an optional ATX closing sequence (``# title ##``),
 #: which CommonMark keeps out of the heading's text.
 _HEADING_TAIL_RE = re.compile(r"(?:[ \t]+#+)?[ \t]*$")
-#: ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not cover.
-_EMPTY_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(\s*\)")
+#: The leading ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not
+#: cover. The text may hold one level of nested brackets (``[a[b]c]()``,
+#: ``[![alt](src)]()``) but not a nested link (a pair followed by ``(`` and not
+#: led by ``!``): CommonMark lets no link hold another, so the inner one is the
+#: link. The two nested alternatives exclude each other on the ``!``, and
+#: neither starts on a character the first accepts, so the repeat cannot
+#: backtrack badly.
+_EMPTY_LINK_RE = re.compile(
+    r"(?<!!)\[(?:[^\[\]]|(?<!!)\[[^\[\]]*\](?!\()|(?<=!)\[[^\[\]]*\])*\]\(\s*\)"
+)
+#: What ``_mask_inline`` rewrites or steps over, tried in this order at each
+#: position: a backslash escape, a code span, an unclosed backtick run. The
+#: escape comes first so an escaped backtick opens nothing; a backslash inside
+#: a span is never reached, because the span is consumed whole. An unclosed run
+#: is consumed whole too, so its tail cannot open a shorter span. The span
+#: alternative is ``lode.docs_slug._INLINE_CODE_RE`` without its leading
+#: lookbehind, which would stop a span opening right after an escaped backtick.
+_MASK_TOKEN_RE = re.compile(r"\\(?P<esc>.)|(?P<run>`+)(?!`).+?(?<!`)(?P=run)(?!`)|`+")
 
 
-def _mask_code_spans(line: str) -> str:
+def _mask_token(m: re.Match[str]) -> str:
+    if m["run"]:
+        return "`" * len(m.group())
+    if m["esc"] in ("[", "]", "!"):
+        return "__"
+    return m.group()
+
+
+def _mask_inline(line: str) -> str:
     """``line`` with every inline code span (a backtick run closed by a
-    same-length run on this line) overwritten by backticks, so offsets hold
-    and no rule can match inside one. A span in a link's text leaves the link
-    matchable: ``[`f()`]()`` is still an empty link."""
-    return _INLINE_CODE_RE.sub(lambda m: "`" * len(m.group()), line)
+    same-length run on this line) overwritten by backticks, and every escaped
+    bracket or exclamation mark (``\\[``, ``\\]``, ``\\!``) by two underscores,
+    so offsets hold and no rule can match inside a span, on a literal bracket,
+    or read a literal ``!`` as an image marker. A span in a link's text leaves
+    the link matchable: ``[`f()`]()`` is still an empty link."""
+    # Most lines that reach here hold a link and neither character.
+    if "`" not in line and "\\" not in line:
+        return line
+    return _MASK_TOKEN_RE.sub(_mask_token, line)
 
 
 def _is_blank(line: str) -> bool:
@@ -64,8 +92,9 @@ def lint_line_tagged(
     # Both inline rules need one of these; most lines have neither, and this
     # runs once per drawn row.
     if "\t" in line or "](" in line:
-        masked = _mask_code_spans(line)
-        found += [("MD010", i, i + 1) for i, c in enumerate(masked) if c == "\t"]
+        masked = _mask_inline(line)
+        if "\t" in masked:
+            found += [("MD010", i, i + 1) for i, c in enumerate(masked) if c == "\t"]
         found += [("MD042", *m.span()) for m in _EMPTY_LINK_RE.finditer(masked)]
 
     h = _HEADING_RE.match(line)

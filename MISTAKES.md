@@ -4,6 +4,24 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-27 — A shell-only change merged to trunk outside `/land` turned the full test suite red
+
+- **What happened:** `0ff4626c` added `lode.sh` at the repo root and was merged directly to
+  `trunk` as `ab3f1267`, not through `/land`. `tests/test_bd_list_limit_gate.py` asserts that
+  every tracked `.sh` file sits in a directory the gate scans, and the repo root was not one,
+  so `test_scan_scope_covers_every_tracked_sh_file` failed on `trunk` from that merge on
+  (`lode-oy1t1`).
+- **Root cause:** the merge skipped `/land`, whose post-merge re-gate runs the full `tests`
+  session. CLAUDE.md's pre-merge rule is worded for "any Python change", and this change
+  added one shell script and no Python. Which gates were run before the merge is not
+  recorded.
+- **Consequence:** `trunk` was red. Every `/land` post-merge re-gate and every reviewer's full
+  `tests` gate on a branch containing the merge would fail until a P0 fix landed.
+- **Rule that prevents a repeat:** a change merged to `trunk` outside `/land` gets `nox -s
+  tests` and `nox -t everything-else` on the merged result first, whatever file types it
+  touches. The corpus-scan gates under `tests/` cover shell scripts and markdown, not only
+  Python.
+
 ## 2026-11-23 — A memory-bound claim in docs/ could not be re-verified because the measurement script behind it was not kept
 
 - **What happened:** `lode-2brb` recorded that a periodic optimize held `VectorStore` RSS flat

@@ -7991,6 +7991,60 @@ one is taken, B: the retire condition rests on it.
     evaluator's throwaway scripts, "those I re-ran" (the zero-hit ids bullet) means those re-run
     while writing this entry, and "I did not measure tokens" (proposal D) means tokens were not
     measured.
+  - **Update (lode-fg7w7.2, 2026-11-27):** proposal B is built and run, and the retire condition
+    is evaluated against the `lode-fg7w7` maintainer ruling of 2026-11-27 (one window, a hard
+    50% line, a snippet-corrected hand read of at least 40 id-less calls, and what a follow is;
+    recorded on `lode-fg7w7` and `lode-fg7w7.2`, and in that ruling's own Update marker on this
+    entry).
+    - **What the script counts.** `scripts/docs_index_usage_report.py` prints the raw rate. A
+      call is followed when a read at one of the next 5 tool-call positions of the same
+      transcript (`--window`) overlaps a range the call cited. A position is one assistant
+      turn: parallel calls count once, and a read made in the index call's own turn is not a
+      follow. Cited ranges are parsed from the call's recorded result: every `path:lo-hi`, and
+      each Update-marker line a `NOTE` names. Paths are reduced to `docs/<name>.md`. Reads: the
+      `Read` tool (no offset and no limit is the whole file), `cat`, `sed -n a,bp` with one
+      range or several, `head`, `tail -n +K`, `awk` on `NR` comparisons alone, and any of the
+      last four fed by `git show <ref>:docs/<name>.md`. A `grep` does not count. The
+      denominator is the calls whose result cites a range. Left out, and counted: calls
+      answered `No results.`, calls whose result cites nothing for another reason (a failed
+      command, `--help`, output filtered away), and calls with no recorded result.
+    - **Where the script departs from the ruling.** Four reads are missed, not counted: `tail
+      -n K`, whose range depends on the file's length; a `sed` address written as shell
+      arithmetic or a regex (15 such reads in all the transcripts, in a window or not); a path
+      with no `docs/` in it after `cd docs` (seen once); and `git show <ref>:<path>` with no
+      range reader after it. One is counted too widely: `cat <file> | head` counts as the whole
+      file (4 such pipes in all the transcripts; 1 follow here rests on a whole-file read).
+    - **The id rule.** An id query is one whose index command names a `lode-` word of 3-6
+      characters. An id elsewhere in the same Bash call (`bd show lode-xxxx; <index> "words"`)
+      does not make it one, unless the query is a shell variable, when the whole call is
+      searched.
+    - **Raw rate.** This project's transcripts from 2026-11-14, index calls made before
+      `lode-fg7w7.1` landed (`--before 2026-11-27T22:36:52`, UTC): 299 calls, 264 of them
+      citing a range. All queries: 139 of 264 followed (53%). **Id-less queries: 51 of 126
+      followed (40%)**; 37% at window 3 and 44% at window 10. The 35 calls left out are 7
+      answered `No results.`, every one an id query, and 28 that cite nothing for another
+      reason, 16 of them id-less. No call lacks a recorded result.
+    - **Corrected rate.** 60 of the 126 id-less cited calls were read by hand at review, drawn
+      at random (Python `random.Random(20261127).shuffle` of the calls sorted by tool-call id,
+      first 60). 24 are followed, as the script says (40%, the rate of the whole set). 3 more
+      were answered from the result with no read: a review finding built on a returned row's
+      title, a report citing a returned pointer, and a recommendation matching the one
+      sentence returned. 33 are neither. No read the script missed was found among the 36 it
+      calls not followed. **Corrected rate: 27 of 60 (45%).** The call-by-call classes are in
+      the notes of `lode-fg7w7.2`.
+    - **Verdict.** 45% is below 50%, so by the rule as ruled **the retire condition is met**,
+      narrowly. Three things bear on how much weight it carries. The sampling error on 60 of
+      126 is about 5 points. In 6 of the 33 the result was on topic and the next steps fit its
+      having been used, but nothing in the transcript shows it; counting all 6 gives 33 of 60
+      (55%). And 5 of the 60 are queries run to test the index itself (1 of them followed);
+      without them it is 26 of 55 (47%). A `human` ticket (`lode-13i8j`) carries the
+      confirmation and any retire.
+    - **Earlier figures, superseded.** As built: 36 of 105 (34%), the id rule searching the
+      whole Bash call. After the first review narrowed the id rule and read several-range
+      `sed` scripts: 44 of 126 (35%), every tool call its own position and no cutoff. Counting a
+      turn as one position, the `NOTE` lines and the `git show` pipe bring it to 51 of 126.
+      The built hand read (24 calls, drawn under the first id rule, snippet answers not
+      classified) is replaced by the one above.
   - **Update (lode-fg7w7.3, 2026-11-27):** proposal C's "Not checked: whether it covers what the
     re-assertions check" is now checked, read from the scripts: partly. See the entry "Fold the
     deterministic guard-script ritual into fewer tool calls" (`lode-fg7w7.3`) below.
