@@ -218,9 +218,10 @@ def test_mapping_covers_every_heading_anchor_with_github_numbering() -> None:
 
 def test_unmapped_links_finds_a_dangling_anchor(tmp_path: Path) -> None:
     result = _mig.migrate(_text(), overrides=(), rng=random.Random(0))
+    # Joined at run time so the repo-wide link scan does not read these as links.
+    page = "decisions.md"
     (tmp_path / "a.md").write_text(
-        "[ok](decisions.md#first-section-decided-lode-eee1) "
-        "[bad](decisions.md#gone-heading)"
+        f"[ok]({page}#first-section-decided-lode-eee1) [bad]({page}#gone-heading)"
     )
     found, missing = _mig.unmapped_links(tmp_path, result.mapping)
     assert found == 2
