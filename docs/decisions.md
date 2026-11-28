@@ -44,6 +44,12 @@ excused by name in the gate module. Each bears on an earlier entry that carries 
 marker (checked on that date; the `lode-3xzy` entry had none and got one then). Nothing is added to
 that list: a new head that opens with the lead-in is reworded.
 
+**Update (lode-nsq11, 2026-11-28):** the docs index is retired, so the reason the two paragraphs
+above give no longer exists, and the gate that failed on a column-zero marker was removed with the
+chunker it took its units from; the list of seven excused heads went with it. Nothing checks the
+indent now. The indent rule itself is left standing: nobody has ruled on it, and an indented marker
+still reads as part of the entry it corrects.
+
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
 pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
@@ -5230,6 +5236,11 @@ entries below from being rewritten to chase the current tree.)
     every unit of an oversized section as well, so once the last `##` section of this file is
     over the limit, each of its units lists the marker of every bullet entry appended after it
     until a `##` follows.
+  - **Update (lode-nsq11, 2026-11-28):** this decision is reversed. The index is RETIRED on a
+    maintainer ruling and its scripts are deleted, so nothing in this entry or its markers above
+    is live; look a decision up with `grep` over `docs/`. The record is the `lode-nsq11` Update on
+    the entry "docs-index: usage evaluation, verdict, and ranked agent-input alternatives"
+    (`lode-a55l6`).
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6259,6 +6270,11 @@ entries below from being rewritten to chase the current tree.)
   before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
   tool call once, and classify an index call by segment" (`lode-yt7q2`).
 
+  **Update (lode-nsq11, 2026-11-28):** the docs index is retired, and both instruments went with
+  it: `scripts/docs_index_log.py` and `scripts/docs_index_usage_report.py` are deleted, and nothing
+  writes the invocation log any more. The record is the `lode-nsq11` Update on the entry
+  "docs-index: usage evaluation, verdict, and ranked agent-input alternatives" (`lode-a55l6`).
+
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
   this file's preamble. `_classify` used to run its write/version-control exclusion and its
@@ -6376,7 +6392,7 @@ entries below from being rewritten to chase the current tree.)
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
-  `scripts/docs_index_loader.py`'s `load_sibling()`, but each of
+  [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
   `docs_index_build.py`, `docs_index_log.py` and `docs_index_query.py` still has to reach that file
   by path first — `scripts/` is not an installed package, so the bootstrap needs the very
   `spec_from_file_location`/`exec_module` mechanism the loader exists to remove one level up. Three
@@ -6403,12 +6419,19 @@ entries below from being rewritten to chase the current tree.)
   object and break `isinstance`) and the caching must come back. Note the contrast with
   `load_sibling()` itself, which *does* cache: the modules it loads carry real top-level state that
   callers depend on getting back as the same object every time.
-  `tests/test_docs_index_loader.py` pins this against the
+  [`tests/test_docs_index_loader.py`](../tests/test_docs_index_loader.py) pins this against the
   SHIPPED code, not against a copy of the bootstrap: it AST-scans all three callers for any
   `sys.modules[...]` write, AST-scans the loader itself for any top-level state, checks that
   importing each caller leaves no public `docs_index_loader` entry behind, and checks that
   `load_sibling()`'s own caching still returns one module object per private name across two
   independent loader copies.
+
+  **Update (lode-nsq11, 2026-11-28):** the docs index is retired and every file this entry names
+  under `scripts/docs_index_*` and `tests/test_docs_index_*` is deleted, so nothing here is live.
+  The two links above are left as written and now point at nothing; `scripts/check_links.py`
+  excuses them by name (`HISTORICAL_DEAD_LINKS`). The record is the `lode-nsq11` Update on the
+  entry "docs-index: usage evaluation, verdict, and ranked agent-input alternatives"
+  (`lode-a55l6`).
 
 - **The platform floor: the shipped app must run on macOS; dev/workflow tooling is Linux/WSL-only
   (`lode-dz92`, 2026-09-15, maintainer decision).** macOS support is required **only** for the
@@ -6935,6 +6958,10 @@ entries below from being rewritten to chase the current tree.)
     first `##` of this file also gets it for the Update markers below it, up to the next `##`,
     whether or not an entry was split. The line now reads "see the Update markers at line ...".
     The rule and its limits are in the `lode-8cp63` Update on the `lode-t6o1` entry.
+  - **Update (lode-nsq11, 2026-11-28):** the docs index is retired and the chunker and query
+    script are deleted, so no `NOTE` is printed any more. The record is the `lode-nsq11` Update
+    on the entry "docs-index: usage evaluation, verdict, and ranked agent-input alternatives"
+    (`lode-a55l6`).
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
@@ -8090,6 +8117,19 @@ one is taken, B: the retire condition rests on it.
     against an Update marker the index would cut off from its entry is removed with the chunker
     it keyed on. Proposals A and B of this entry are moot; the entries above stay as the
     historical record, and their `docs_index_query.py` pointers no longer run.
+    - **Decided at code review, not by the maintainer.** (1) Two links in the `lode-7l68` entry
+      point at files this removes. The entry is not edited; `scripts/check_links.py` excuses the
+      two links by name (`HISTORICAL_DEAD_LINKS`), following the `lode-1dmu` paragraph of this
+      file's preamble, which calls a reference to a since-deleted path expected. (2) The
+      `lode-v1gnv` and `lode-px81z` preamble paragraphs get an Update saying their gate is gone;
+      the indent rule itself is left standing. (3) The `lode-t6o1`, `lode-dozi`, `lode-7l68` and
+      `lode-funp` entries get a pointer Update to this one. The `lode-wtk2` and `lode-yt7q2`
+      entries, which correct the deleted usage report, do not.
+    - **Left open (`lode-811mk`).** `lode-ebayj`'s re-measure names
+      `scripts/decisions_lookup_baseline.py`, and all but one of its thresholds measure index
+      lookups.
+      The script cannot run without the usage report, so it stays removed, and what replaces
+      the re-measure is the maintainer's to decide.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 

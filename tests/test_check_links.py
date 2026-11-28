@@ -1036,6 +1036,32 @@ def test_real_repo_passes_the_gate():
     assert errors == [], "broken link(s):\n" + "\n".join(str(e) for e in errors)
 
 
+def test_historical_dead_link_is_excused_for_its_named_pair_only(tmp_path):
+    """The same destination written in another file, and another dead link in
+    the excused file, are still reported."""
+    source, target = sorted(check_links.HISTORICAL_DEAD_LINKS)[0]
+    _write(tmp_path, source, f"[gone]({target}) [also gone](nope.md)\n")
+    _write(tmp_path, f"{_DOCS}/other.md", f"[gone]({target})\n")
+    _git_init(tmp_path)
+
+    assert [(e.source.name, e.target) for e in check(tmp_path)] == [
+        (Path(source).name, "nope.md"),
+        ("other.md", target),
+    ]
+
+
+def test_every_historical_dead_link_still_excuses_something():
+    """A pair whose source no longer writes the link, or whose target exists
+    again, excuses nothing and would hide the next dead link of that name."""
+    for source, target in sorted(check_links.HISTORICAL_DEAD_LINKS):
+        path = REPO_ROOT / source
+        written = [
+            t for _, t in check_links._links_in_file(path.read_text(encoding="utf-8"))
+        ]
+        assert target in written, f"{source} no longer links {target}"
+        assert not (path.parent / target).exists(), f"{target} exists again"
+
+
 def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path):
     _write(tmp_path, f"{_DOCS}/a.md", "line one\nSee [missing](nope.md) here.\n")
     _git_init(tmp_path)

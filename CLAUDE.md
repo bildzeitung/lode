@@ -74,7 +74,8 @@ The source of truth is the design under [`docs/`](docs/). Read [`docs/design.md`
 - [`docs/configuration.md`](docs/configuration.md) — every tunable knob and build constant
 - [`docs/decisions.md`](docs/decisions.md) — open decisions, deferred but not forgotten
 
-To look anything up in those docs without reading one whole, `grep` over `docs/` (and `docs/decisions/` once lode-ebayj lands).
+To look anything up in those docs without reading one whole, `grep -rn` over `docs/`, which also
+covers the entry files under `docs/decisions/`.
 
 **Build sequencing lives in `docs/design.md` §7** — core-first (notes + version chains + cited Q&A + a minimal eval harness), then connectors one at a time. Do not fan out before the core loop works.
 

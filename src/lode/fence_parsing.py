@@ -12,8 +12,8 @@ line inside a ```` ``` ````-opened block, is content, not a close).
 Importable from **both** ``src/`` and ``tests/`` (pytest's own ``sys.path``
 setup makes ``src/`` importable from ``tests/``).
 
-``scripts/check_links.py`` is a third fence scanner but not a third
-copy: its ``_content_lines`` deliberately implements a DIFFERENT, simpler rule (toggles
+``scripts/check_links.py`` is a separate fence scanner, not a copy of this
+one: its ``_content_lines`` deliberately implements a DIFFERENT, simpler rule (toggles
 on ANY fence-looking line, regardless of marker character or length) and is
 NOT a consumer of this module; see its own docstring for why.
 

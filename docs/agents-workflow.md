@@ -419,13 +419,14 @@ Two rules, three message texts:
   classifier looks for the shell builtin `eval` by *shape*, and over-matches: any shell word whose
   text, case-insensitively and after quote removal, is `eval` or ends in a path segment `eval` is
   refused, wherever it sits in the command. Refused: `nox -s eval`, `ls lode/eval`, `ls lode/eval/`,
-  `grep -i 'eval' f`, `echo Eval`, `echo lode/eval`, `scripts/tool.py "eval"`. Accepted:
-  `evaluate`, `retrieval`, `eval_x`, `tests/test_eval_live.py`, `lode/eval/x` (the segment is not
-  last), `--session=eval`, and `eval` embedded in a larger quoted string (`echo "x eval y"`,
-  `scripts/tool.py "eval harness"`). Every 2.1.325 observation reproduced on 2.1.326,
-  which added the trailing-slash and bare-word cases. Impact: `nox -s eval` is refused as
-  written. (`--session=eval` getting through is a gap in the over-match, not a workaround this
-  section relies on.)
+  `grep -i 'eval' f`, `echo Eval`, `echo lode/eval`, and a quoted `"eval"` passed as the one
+  argument of a script. Accepted: `evaluate`, `retrieval`, `eval_x`, `tests/test_eval_live.py`,
+  `lode/eval/x` (the segment is not last), `--session=eval`, and `eval` embedded in a larger quoted
+  string (`echo "x eval y"`, or `"eval harness"` passed to the same script). Every 2.1.325
+  observation reproduced on 2.1.326, which added the trailing-slash and script-argument cases
+  (observed on a script that has since been removed). Impact: `nox -s eval` is refused as written.
+  (`--session=eval` getting through is a gap in the over-match, not a workaround this section
+  relies on.)
 - **"too complex to verify"** — "… but this command names git in a form too complex to verify that it
   stays inside the worktree. Refusing to run it … Split it into plain, separate commands …", and a
   second text that drops "names git in a form" ("… but this command is too complex to verify …").
@@ -723,7 +724,7 @@ rescue branch matters, why `origin/trunk` and never bare `trunk`, why the `case`
 fails to reach the agent that needs it, right when it needs it, outweighs the drift cost of three
 copies. `docs/decisions.md`'s three re-narrations of the same material carried no such argument —
 nothing reads `decisions.md` immediately before a destructive command — so those were trimmed to
-decision-timeline pointers instead (`grep -rn "lode-zt62" docs/`).
+decision-timeline pointers instead.
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
 state (`.claude/skills/code/rebase-pickup.md` step 2, `code-reviewer.md` step 2) — never a reason to avoid the
@@ -1185,7 +1186,7 @@ blocks in the skill markdown under `.claude/skills/` print the identical "GATE C
 on a machine/checkout fault and then exit 1 rather than 2 — this is correct, not an inconsistency with
 the convention above, and the call sites are not to be changed. The canonical statement of why lives in
 `scripts/gate-lib.sh`'s own header
-(`grep -rn "lode-vmnx" docs/`): the exit-2 convention exists for a
+(`grep -n "lode-vmnx" scripts/gate-lib.sh`): the exit-2 convention exists for a
 **calling script** to classify a subprocess's exit code programmatically; an agent-executed skill
 fence has no calling script, only the agent itself reading the stderr banner directly, so the
 distinction `gate-lib.sh` enforces doesn't apply there.
