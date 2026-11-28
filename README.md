@@ -45,7 +45,15 @@ quality gates); the short version:
 git clone https://github.com/bildzeitung/lode.git
 cd lode
 uv sync
-uv run --frozen lode --help   # nothing to activate: run lode through uv
+./lode.sh --help              # nothing to activate: wraps `uv run --frozen lode`
+```
+
+`lode.sh` keeps your working directory, so relative paths in its arguments resolve where you typed
+them. To run `lode` from anywhere, symlink it onto your `PATH` — it resolves the symlink back to
+the checkout, so it always runs that checkout's code against the locked dependencies:
+
+```bash
+ln -s "$PWD/lode.sh" ~/.local/bin/lode
 ```
 
 ## The idea in one breath
