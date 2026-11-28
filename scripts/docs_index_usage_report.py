@@ -51,6 +51,7 @@ import re
 import shlex
 from collections import Counter, defaultdict
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -505,15 +506,24 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-#: How many tool calls after an index call may carry the read that counts as
-#: following it (lode-fg7w7.2). Calls are counted in transcript order, any
-#: tool, the index's own repeat calls included. One window only, by ruling.
+#: How many tool-call positions after an index call may carry the read that
+#: counts as following it (lode-fg7w7.2). A position is one assistant turn's
+#: tool calls: calls made in parallel count once, and one made in the index
+#: call's own turn, before its result existed, is never a follow. Any tool
+#: counts, the index's own repeat calls included. One window only, by ruling.
 DEFAULT_FOLLOW_WINDOW = 5
 
 #: One cited row of the index's output: ``<path>:<lo>-<hi>``, any marker or
 #: title after it ignored. The path is that of the checkout that ran the
 #: query, so :func:`_docs_relpath` normalizes it before comparing.
-_CITED_RE = re.compile(r"^(\S+\.md):(\d+)-(\d+)", re.MULTILINE)
+_CITED_RE = re.compile(r"^(\S+\.md):(\d+)-(\d+)")
+
+#: The line under a cited row that names the Update markers of a split entry,
+#: in either wording the index has printed. Each line named is cited too.
+_NOTE_RE = re.compile(r"^\s+NOTE: .*Update markers at line (\d+(?:, \d+)*)")
+
+#: What the ``Read`` tool returns when no ``limit`` is given.
+_READ_DEFAULT_LIMIT = 2000
 
 #: A bd id, as :func:`_is_id_query` looks for one. Any ``lode-`` word of 3-6
 #: letters or digits matches, so a query naming ``lode-index`` counts as an
@@ -536,8 +546,11 @@ _STATUS_RANK = {
 
 #: One command of a ``sed`` script: ``Np``, ``A,Bp`` or ``A,$p``.
 _SED_RANGE_RE = re.compile(r"^(\d+)(?:,(\d+|\$))?p$")
-_AWK_PAIR_RE = re.compile(r"NR\s*==\s*(\d+)\s*,\s*NR\s*==\s*(\d+)")
-_AWK_CMP_RE = re.compile(r"NR\s*(>=|>|<=|<|==)\s*(\d+)")
+#: An ``awk`` program of one pattern and at most one action after it.
+_AWK_PROGRAM_RE = re.compile(r"\s*([^{}]+?)\s*(?:\{[^{}]*\})?\s*")
+_AWK_PAIR_RE = re.compile(r"NR==(\d+),NR==(\d+)")
+_AWK_CMP_RE = re.compile(r"NR(>=|>|<=|<|==)(\d+)")
+_AWK_NR_ONLY_RE = re.compile(rf"{_AWK_CMP_RE.pattern}(?:&&{_AWK_CMP_RE.pattern})*")
 
 _Range = tuple[int | float, int | float]
 
@@ -552,12 +565,22 @@ def _docs_relpath(path: str) -> str | None:
 
 
 def _awk_ranges(program: str) -> list[_Range]:
-    pair = _AWK_PAIR_RE.search(program)
+    """The line range an ``awk`` program prints, when its one pattern is
+    ``NR==a,NR==b`` or ``NR`` comparisons joined by ``&&``. A pattern that
+    also tests the line (a regex, ``length``) is a filter, like a ``grep``,
+    and an action that prints ``length`` prints no line: neither has a range.
+    Nor has a program the comparisons cannot be read off: one that joins them
+    with ``||``, or one with a second rule (``NR>120{exit} NR>=100``)."""
+    shape = _AWK_PROGRAM_RE.fullmatch(program)
+    if not shape or "length" in program:
+        return []
+    pattern = "".join(shape.group(1).split())
+    pair = _AWK_PAIR_RE.fullmatch(pattern)
     if pair:
         return [(int(pair.group(1)), int(pair.group(2)))]
-    comparisons = _AWK_CMP_RE.findall(program)
-    if not comparisons:
+    if not _AWK_NR_ONLY_RE.fullmatch(pattern):
         return []
+    comparisons = _AWK_CMP_RE.findall(pattern)
     lo = 1
     hi: int | float = math.inf
     for op, num in comparisons:
@@ -612,30 +635,46 @@ def _segment_line_ranges(name: str | None, tokens: list[str]) -> list[_Range]:
 
 def _tool_reads(tool_name: str, tool_input: dict[str, Any]) -> list[tuple[str, _Range]]:
     """``(docs path, line range)`` for every read of ``docs/*.md`` one tool
-    call makes: a ``Read`` by its offset and limit (absent = to the end), a
-    ``cat``/``sed``/``head``/``tail``/``awk`` segment by the range it names."""
+    call makes.
+
+    A ``Read`` with neither offset nor limit is the whole file, by ruling; with
+    an offset alone it is the :data:`_READ_DEFAULT_LIMIT` lines the tool
+    returns. A ``cat``/``sed``/``head``/``tail``/``awk`` segment reads the range
+    it names, of the docs paths it names. A ``sed``/``head``/``tail``/``awk``
+    naming no docs path reads the file a ``git show <ref>:docs/<name>.md``
+    just before it prints, since that is the pipe that feeds it; a ``git show``
+    followed by anything else is not counted.
+    """
     if tool_name == "Read":
         rel = _docs_relpath(str(tool_input.get("file_path", "")))
         if not rel:
             return []
         offset = tool_input.get("offset")
         limit = tool_input.get("limit")
-        lo = offset if isinstance(offset, int) and offset > 0 else 1
-        hi = lo + limit - 1 if isinstance(limit, int) and limit > 0 else math.inf
-        return [(rel, (lo, hi))]
+        has_offset = isinstance(offset, int) and offset > 0
+        lo = offset if has_offset else 1
+        if isinstance(limit, int) and limit > 0:
+            return [(rel, (lo, lo + limit - 1))]
+        return [(rel, (lo, lo + _READ_DEFAULT_LIMIT - 1 if has_offset else math.inf))]
     command = str(tool_input.get("command", "")) if tool_name == "Bash" else ""
     if not _mentions_docs_md(command):
         return []
     reads: list[tuple[str, _Range]] = []
+    shown: list[str] = []
     for seg in _split_segments(command):
+        piped, shown = shown, []
         if _is_write_form(seg):
             continue
         tokens = _segment_tokens(seg)
-        paths = [rel for tok in tokens if (rel := _docs_relpath(tok))]
-        if not paths:
+        name = _segment_command_name(seg)
+        if name == "git" and "show" in tokens:
+            shown = [
+                rel for tok in tokens if ":" in tok and (rel := _docs_relpath(tok))
+            ]
             continue
-        ranges = _segment_line_ranges(_segment_command_name(seg), tokens)
-        reads.extend((p, r) for p in paths for r in ranges)
+        paths = [rel for tok in tokens if (rel := _docs_relpath(tok))]
+        ranges = _segment_line_ranges(name, tokens)
+        reads.extend((p, r) for p in paths or piped for r in ranges)
     return reads
 
 
@@ -666,23 +705,35 @@ def _is_id_query(command: str) -> bool:
     return any(_BD_ID_RE.search(seg) for seg in segments)
 
 
+def _cited_ranges(result: str) -> list[tuple[str, int, int]]:
+    """Every ``(docs path, lo, hi)`` an index result cites: each printed
+    ``path:lo-hi`` row, and each Update-marker line a ``NOTE`` under that row
+    names, as a one-line range of the row's file."""
+    cited: list[tuple[str, int, int]] = []
+    path: str | None = None
+    for line in result.splitlines():
+        if row := _CITED_RE.match(line):
+            path = _docs_relpath(row.group(1))
+            if path:
+                cited.append((path, int(row.group(2)), int(row.group(3))))
+        elif path and (note := _NOTE_RE.match(line)):
+            cited.extend((path, int(n), int(n)) for n in note.group(1).split(", "))
+    return cited
+
+
 def _follow_status(
-    result: str | None, later_calls: list[list[tuple[str, _Range]]]
+    result: str | None, window_reads: list[list[tuple[str, _Range]]]
 ) -> tuple[str, bool]:
     """``(status, whole_file_only)`` of one index call, from its recorded
-    result and the reads of the tool calls in its window."""
+    result and the reads at each tool-call position in its window."""
     if result is None:
         return "no-result", False
-    cited = [
-        (rel, int(m.group(2)), int(m.group(3)))
-        for m in _CITED_RE.finditer(result)
-        if (rel := _docs_relpath(m.group(1)))
-    ]
+    cited = _cited_ranges(result)
     if not cited:
         return ("zero-hit" if _NO_RESULTS in result else "uncited"), False
     hits = [
         read
-        for reads in later_calls
+        for reads in window_reads
         for read in reads
         if any(_overlaps(c, read) for c in cited)
     ]
@@ -691,15 +742,28 @@ def _follow_status(
     return "followed", all(lo <= 1 and hi == math.inf for _, (lo, hi) in hits)
 
 
-def scan_follow(
-    *projects_dirs: Path, window: int = DEFAULT_FOLLOW_WINDOW
-) -> list[dict[str, Any]]:
-    """One row per docs-index call: ``{idless, status, whole_file_only}``.
+def _timestamp(entry: dict[str, Any]) -> datetime | None:
+    """A transcript line's ``timestamp`` as an aware datetime, ``None`` when
+    the line has none (an ``api-request-blob`` line) or it does not parse."""
+    try:
+        stamp = datetime.fromisoformat(str(entry.get("timestamp", "")))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
-    ``status`` is ``"followed"`` when one of the next ``window`` tool calls in
-    the same transcript reads a range overlapping a cited ``path:lo-hi`` (cited
-    ranges are parsed from the call's recorded result, never re-queried),
-    ``"not-followed"`` when none does, ``"zero-hit"`` when the index answered
+
+def scan_follow(
+    *projects_dirs: Path,
+    window: int = DEFAULT_FOLLOW_WINDOW,
+    before: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """One row per docs-index call: ``{id, timestamp, idless, status,
+    whole_file_only}``.
+
+    ``status`` is ``"followed"`` when one of the next ``window`` tool-call
+    positions in the same transcript (:data:`DEFAULT_FOLLOW_WINDOW`) reads a
+    range overlapping a cited one (:func:`_cited_ranges`, parsed from the
+    call's recorded result, never re-queried), ``"not-followed"`` when none does, ``"zero-hit"`` when the index answered
     ``No results.``, ``"uncited"`` when the result cites nothing for any other
     reason (the command failed, printed ``--help``, or had its output filtered
     away), ``"no-result"`` when the transcript holds no result for the call.
@@ -708,42 +772,74 @@ def scan_follow(
     whole file or an open-ended tail from line 1, which overlaps any range.
 
     A call held by more than one transcript is one row: :data:`_STATUS_RANK`.
+    With ``before``, a call made at or after that time is left out, and so is
+    one whose time no transcript records.
     """
     rows: dict[str, dict[str, Any]] = {}
     transcripts = sorted(p for d in projects_dirs for p in d.rglob("*.jsonl"))
     for transcript_path in transcripts:
-        calls: list[list[tuple[str, _Range]]] = []
+        positions: list[list[tuple[str, _Range]]] = []
+        turn_position: dict[str, int] = {}
+        last_entry: dict[str, Any] | None = None
         index_calls: dict[str, tuple[int, bool]] = {}
+        stamps: dict[str, datetime] = {}
         results: dict[str, str] = {}
         seen: set[str] = set()
-        for _, block in _iter_blocks(transcript_path, "tool_use", "tool_result"):
+        for entry, block in _iter_blocks(transcript_path, "tool_use", "tool_result"):
             if block["type"] == "tool_result":
                 tid = block.get("tool_use_id")
                 if isinstance(tid, str) and tid in index_calls:
                     results.setdefault(tid, _result_text(block.get("content")))
                 continue
             tid = block.get("id")
-            if not isinstance(tid, str) or not tid or tid in seen:
+            if not isinstance(tid, str) or not tid:
                 continue
-            seen.add(tid)
-            name = block.get("name", "")
-            tool_input = block.get("input") or {}
-            if _classify(name, tool_input) == "index":
-                command = str(tool_input.get("command", ""))
-                index_calls[tid] = (len(calls), not _is_id_query(command))
-            calls.append(_tool_reads(name, tool_input))
+            if tid not in seen:
+                seen.add(tid)
+                # One turn is one position. An ``assistant`` line holds one
+                # call and shares its message id with the rest of its turn; an
+                # ``api-request-blob`` line has no message id and holds the
+                # whole turn.
+                turn = entry["message"].get("id")
+                if isinstance(turn, str) and turn in turn_position:
+                    pos = turn_position[turn]
+                elif entry is last_entry:
+                    pos = len(positions) - 1
+                else:
+                    pos = len(positions)
+                    positions.append([])
+                    if isinstance(turn, str):
+                        turn_position[turn] = pos
+                last_entry = entry
+                name = block.get("name", "")
+                tool_input = block.get("input") or {}
+                if _classify(name, tool_input) == "index":
+                    command = str(tool_input.get("command", ""))
+                    index_calls[tid] = (pos, not _is_id_query(command))
+                positions[pos].extend(_tool_reads(name, tool_input))
+            # Outside the first-sighting branch: the line that first shows a
+            # call can be the one without a timestamp.
+            if tid in index_calls and tid not in stamps and (at := _timestamp(entry)):
+                stamps[tid] = at
         for tid, (pos, idless) in index_calls.items():
             status, whole_file_only = _follow_status(
-                results.get(tid), calls[pos + 1 : pos + 1 + window]
+                results.get(tid), positions[pos + 1 : pos + 1 + window]
             )
             held = rows.get(tid)
+            row = {
+                "id": tid,
+                "timestamp": stamps.get(tid) or (held and held["timestamp"]),
+                "idless": idless,
+                "status": status,
+                "whole_file_only": whole_file_only,
+            }
             if held is None or _STATUS_RANK[status] > _STATUS_RANK[held["status"]]:
-                rows[tid] = {
-                    "idless": idless,
-                    "status": status,
-                    "whole_file_only": whole_file_only,
-                }
-    return list(rows.values())
+                rows[tid] = row
+            elif held["timestamp"] is None:
+                held["timestamp"] = row["timestamp"]
+    if before is None:
+        return list(rows.values())
+    return [r for r in rows.values() if r["timestamp"] and r["timestamp"] < before]
 
 
 def summarize_follow(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -821,9 +917,22 @@ def report(
         typer.Option(
             "--window",
             min=1,
-            help="Tool calls after an index call that may follow it.",
+            help=(
+                "Tool-call positions after an index call that may follow it; "
+                "calls made in parallel in one turn are one position."
+            ),
         ),
     ] = DEFAULT_FOLLOW_WINDOW,
+    before: Annotated[
+        datetime | None,
+        typer.Option(
+            "--before",
+            help=(
+                "Leave index calls made at or after this UTC time out of the "
+                "pointer-follow rate."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Print the index-vs-direct-access baseline mined from transcripts."""
     resolved_projects_dir = (
@@ -855,9 +964,11 @@ def report(
         print(f"unnarrowed Grep (may or may not have read docs/): {ambiguous_count}")
     _print_split("per day", result["per_day"])
     _print_split("main vs subagent", result["per_role"])
-    follow = summarize_follow(scan_follow(*roots, window=window))
+    cutoff = before.replace(tzinfo=UTC) if before else None
+    follow = summarize_follow(scan_follow(*roots, window=window, before=cutoff))
+    until = f", index calls before {cutoff:%Y-%m-%dT%H:%M:%SZ}" if cutoff else ""
     print()
-    print(f"pointer-follow rate (window: next {window} tool calls):")
+    print(f"pointer-follow rate (window: next {window} tool-call positions{until}):")
     _print_follow("all queries", follow["overall"])
     _print_follow("id-less queries", follow["idless"])
 

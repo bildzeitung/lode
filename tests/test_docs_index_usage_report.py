@@ -768,6 +768,49 @@ def _follow_rows(tmp_path: Path, entries: list[dict], **kwargs: int) -> list[dic
         (("Bash", {"command": "tail -n +119 docs/stack.md"}), "followed"),
         (("Bash", {"command": "grep -n foo docs/stack.md"}), "not-followed"),
         (("Bash", {"command": "sed -n 100,120p docs/storage.md"}), "not-followed"),
+        (
+            (
+                "Bash",
+                {"command": "git show origin/trunk:docs/stack.md | sed -n 90,100p"},
+            ),
+            "followed",
+        ),
+        (
+            ("Bash", {"command": "git show origin/trunk:docs/stack.md | sed -n 1,99p"}),
+            "not-followed",
+        ),
+        (
+            ("Bash", {"command": "git show origin/trunk:docs/stack.md | grep -n foo"}),
+            "not-followed",
+        ),
+        (("Bash", {"command": "git show origin/trunk:docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "git show --stat HEAD | head -5"}), "not-followed"),
+        (
+            (
+                "Bash",
+                {
+                    "command": "awk 'NR>=100 && NR<=120 {print NR\": \"$0}' docs/stack.md"
+                },
+            ),
+            "followed",
+        ),
+        (
+            ("Bash", {"command": "awk 'NR>=90 && length($0)>100' docs/stack.md"}),
+            "not-followed",
+        ),
+        (
+            ("Bash", {"command": "awk 'NR>=90 {print NR\": \"length}' docs/stack.md"}),
+            "not-followed",
+        ),
+        (("Bash", {"command": "awk 'NR>=90 && /foo/' docs/stack.md"}), "not-followed"),
+        (
+            ("Bash", {"command": "awk 'NR>120{exit} NR>=100' docs/stack.md"}),
+            "not-followed",
+        ),
+        (
+            ("Bash", {"command": "awk 'NR<=10 || NR>=100' docs/stack.md"}),
+            "not-followed",
+        ),
     ],
 )
 def test_follow_requires_a_read_range_overlapping_a_cited_range(
@@ -818,6 +861,114 @@ def test_follow_window_and_row_kinds(tmp_path: Path) -> None:
     assert summary["idless"]["followed"] == 1
     assert summary["idless"]["rate"] == 0.5
     assert summary["idless"]["zero_hit"] == 1
+
+
+def _in_turn(turn: str, entry: dict) -> dict:
+    """``entry`` as one ``assistant`` line of the turn ``turn``."""
+    entry["message"]["id"] = turn
+    return entry
+
+
+def test_follow_counts_parallel_calls_in_one_turn_as_one_position(
+    tmp_path: Path,
+) -> None:
+    """The read in the index call's own turn is no follow. The second call's
+    read is two positions on, past four parallel calls; the first call's is
+    five on, the two-call ``api-request-blob`` line counting once."""
+    sed = {"command": "sed -n 100,110p docs/stack.md"}
+    ls = {"command": "ls"}
+    blob = _use("b1", "Bash", ls)
+    blob["message"]["content"] += _use("b2", "Bash", ls)["message"]["content"]
+    entries = [
+        _in_turn("t0", _index_call("i1", "own turn", _CITES)[0]),
+        _in_turn("t0", _use("r0", "Bash", sed)),
+        _result("i1", _CITES),
+        *(_in_turn("t1", _use(f"p{n}", "Bash", ls)) for n in range(4)),
+        blob,
+        _in_turn("t2", _index_call("i2", "third position", _CITES)[0]),
+        _result("i2", _CITES),
+        *(_in_turn("t3", _use(f"q{n}", "Bash", ls)) for n in range(4)),
+        _in_turn("t4", _use("r1", "Bash", sed)),
+    ]
+    _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
+
+    def statuses(window: int) -> list[str]:
+        rows = _report_module.scan_follow(tmp_path, window=window)
+        return [r["status"] for r in rows]
+
+    assert statuses(1) == ["not-followed", "not-followed"]
+    assert statuses(2) == ["not-followed", "followed"]
+    assert statuses(4) == ["not-followed", "followed"]
+    assert statuses(5) == ["followed", "followed"]
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "    NOTE: see the Update markers at line 300, 410 -- they may correct",
+        "    NOTE: this chunk is part of a split entry that carries Update markers "
+        + "at line 300, 410 -- they may correct",
+    ],
+)
+def test_follow_cites_the_update_marker_lines_a_note_names(
+    tmp_path: Path, note: str
+) -> None:
+    result = f"/wt/a/docs/stack.md:100-120  Title\n    snippet\n{note}\n"
+
+    def status(lines: str) -> str:
+        entries = _index_call("i1", "x y", result)
+        entries.append(
+            _use("c1", "Bash", {"command": f"sed -n {lines}p docs/stack.md"})
+        )
+        return _follow_rows(tmp_path, entries)[0]["status"]
+
+    assert status("410") == "followed"
+    assert status("290,300") == "followed"
+    assert status("301,409") == "not-followed"
+
+
+@pytest.mark.parametrize(
+    ("read", "status"),
+    [
+        ({}, "followed"),
+        ({"offset": 3000}, "followed"),
+        ({"offset": 100}, "not-followed"),
+        ({"offset": 100, "limit": 3000}, "followed"),
+    ],
+)
+def test_follow_read_without_a_limit_is_the_lines_the_tool_returns(
+    tmp_path: Path, read: dict, status: str
+) -> None:
+    """No offset and no limit is the whole file, by ruling; an offset alone is
+    2000 lines from it, which stops short of a range cited further down."""
+    entries = _index_call("i1", "x y", "/wt/a/docs/stack.md:3000-3010  Title\n")
+    entries.append(_use("c1", "Read", {"file_path": "docs/stack.md", **read}))
+    assert _follow_rows(tmp_path, entries)[0]["status"] == status
+
+
+def _at(timestamp: str, entry: dict) -> dict:
+    entry["timestamp"] = timestamp
+    return entry
+
+
+def test_follow_before_leaves_out_later_and_undated_calls(tmp_path: Path) -> None:
+    undated_copy = _index_call("i1", "early", _CITES)
+    entries = [
+        *undated_copy,
+        _at("2026-11-27T10:00:00.000Z", _index_call("i1", "early", _CITES)[0]),
+        _at("2026-11-27T12:00:00.000Z", _index_call("i2", "at the cutoff", _CITES)[0]),
+        _result("i2", _CITES),
+        *_index_call("i3", "no time recorded", _CITES),
+    ]
+    _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
+    assert len(_report_module.scan_follow(tmp_path)) == 3
+    cutoff = ["--before", "2026-11-27T12:00:00"]
+    result = runner.invoke(
+        app, ["--projects-dir", str(tmp_path), "--all-projects", *cutoff]
+    )
+    assert result.exit_code == 0, result.output
+    assert "index calls before 2026-11-27T12:00:00Z" in result.output
+    assert "id-less queries: 0/1 followed" in result.output
 
 
 def test_follow_reads_a_result_recorded_as_a_list_of_text_blocks(
@@ -899,5 +1050,5 @@ def test_report_cli_prints_the_follow_rate_with_its_window(tmp_path: Path) -> No
         ["--projects-dir", str(tmp_path), "--all-projects", "--window", "3"],
     )
     assert result.exit_code == 0, result.output
-    assert "window: next 3 tool calls" in result.output
+    assert "window: next 3 tool-call positions)" in result.output
     assert "id-less queries: 1/1 followed = 100%" in result.output
