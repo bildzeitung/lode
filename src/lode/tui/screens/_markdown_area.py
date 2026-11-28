@@ -152,9 +152,8 @@ def _markdown_text_area(
             reaches every note-body screen; the default keeps this function
             usable standalone (tests, scripts) with no app required.
         lint: Build a :class:`~lode.tui.widgets.lint_text_area.LintTextArea`
-            (markdown lint underlines) instead of a plain ``TextArea``, on the
-            grammar path and the grammar-less fallback alike. Only the two
-            editable bodies pass ``True``; the read-only viewers do not.
+            (markdown lint underlines) instead of a plain ``TextArea``. Only
+            the two editable bodies pass ``True``.
     """
     area_cls = LintTextArea if lint else TextArea
     try:

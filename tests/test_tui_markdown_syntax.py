@@ -464,7 +464,7 @@ def test_highlights_cover_the_agreed_stock_token_set() -> None:
 _LINTY = "[a]()\n\ntrail   \nend"
 
 
-def _underlined(area: TextArea) -> list[str]:
+def _get_line_underlines(area: TextArea) -> list[str]:
     """Each underlined stretch of the lines ``get_line`` hands the renderer."""
     out: list[str] = []
     for index in range(area.document.line_count):
@@ -487,29 +487,20 @@ def _drawn_underlines(area: TextArea) -> list[str]:
     return [text for text in drawn if text]
 
 
-def test_markdown_text_area_lint_flag_picks_the_widget_class() -> None:
-    plain = _markdown_text_area(_LINTY, id="a")
-    linted = _markdown_text_area(_LINTY, id="a", lint=True)
-
-    assert type(plain) is TextArea
-    assert type(linted) is LintTextArea
-    assert linted.language == "markdown"
-    assert _underlined(plain) == []
-    assert _underlined(linted) == ["[a]()", "   "]
-
-
-def test_markdown_text_area_lint_survives_the_grammar_less_fallback(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("language", ["markdown", None], ids=["grammar", "fallback"])
+def test_markdown_text_area_lint_flag_picks_a_linting_widget(
+    monkeypatch: pytest.MonkeyPatch, language: str | None
 ) -> None:
-    _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
+    if language is None:
+        _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
     plain = _markdown_text_area(_LINTY, id="a")
     linted = _markdown_text_area(_LINTY, id="a", lint=True)
 
-    assert linted.language is None
+    assert linted.language == language
     assert type(plain) is TextArea
     assert type(linted) is LintTextArea
-    assert _underlined(plain) == []
-    assert _underlined(linted) == ["[a]()", "   "]
+    assert _get_line_underlines(plain) == []
+    assert _get_line_underlines(linted) == ["[a]()", "   "]
 
 
 def test_editable_bodies_draw_lint_underlines_and_viewers_do_not(
@@ -526,7 +517,8 @@ def test_editable_bodies_draw_lint_underlines_and_viewers_do_not(
 
     async def _type_undo_redo(pilot: Pilot[None], body: TextArea) -> list[list[str]]:
         """What is drawn after typing a trailing run at the end of the body,
-        leaving its line, undoing that and redoing it."""
+        leaving its line, undoing that and redoing it: the run is underlined
+        only while the caret is off its line."""
         body.cursor_location = body.document.end
         await pilot.press("x", "space", "space", "space")
         await pilot.pause()
@@ -544,22 +536,15 @@ def test_editable_bodies_draw_lint_underlines_and_viewers_do_not(
         async with app.run_test() as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
-            body = app.screen.query_one(f"#{BODY_ID}", TextArea)
-            assert isinstance(body, LintTextArea)
-            assert await _type_undo_redo(pilot, body) == [[], ["   "], [], ["   "]]
+            body = app.screen.query_one(f"#{BODY_ID}", LintTextArea)
+            assert await _type_undo_redo(pilot, body) == [[], ["   "]] * 2
 
             app.push_screen(EditScreen("note-a"))
             await pilot.pause()
-            body = app.screen.query_one(f"#{EDIT_BODY_ID}", TextArea)
-            assert isinstance(body, LintTextArea)
+            body = app.screen.query_one(f"#{EDIT_BODY_ID}", LintTextArea)
             loaded = ["[a]()", "   "]
             assert _drawn_underlines(body) == loaded
-            assert await _type_undo_redo(pilot, body) == [
-                loaded,
-                [*loaded, "   "],
-                loaded,
-                [*loaded, "   "],
-            ]
+            assert await _type_undo_redo(pilot, body) == [loaded, [*loaded, "   "]] * 2
 
             for screen, wid in (
                 (VersionViewScreen("note-a", version_id), VERSION_BODY_ID),
