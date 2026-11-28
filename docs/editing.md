@@ -37,8 +37,10 @@ immediately).
 **Colour depth is block-level only, not inline** — a scope decision, not a bug: **emphasis,
 strong, inline code spans, and inline links (`[text](url)`) are NOT coloured.** What *is*
 coloured: headings and heading markers, fenced/indented code and fence
-delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
-*reference-style* link definitions (`[label]: url` — not inline `[text](url)`).
+delimiters, list markers, thematic breaks, and the optional title of a *reference-style* link
+definition (`[label]: url "title"` — not inline `[text](url)`). Block-quote markers, backslash
+escapes, and the label and URL of a reference-link definition get no colour of their own; the
+palette below lists the unmapped captures.
 
 **The palette** (`NOTE_BODY_SYNTAX_STYLES` in `_markdown_area.py`, `lode-lab1`, retuned by
 `lode-dmbc`). The bundled grammar's captures are the complete menu of what *can* be coloured; lode
@@ -54,7 +56,9 @@ maps five of them:
 
 Unmapped, and left that way on purpose: `link.uri`, `link.label`,
 `punctuation.special` (block-quote markers, which the grammar emits as zero-width spans here),
-`string.escape`, and `none`. `none` is the load-bearing one — `lode-76go` found it is emitted
+`string.escape` (a backslash escape, which the block grammar sees inside a reference-link
+definition or a fence info string, not in running text), and `none`.
+`none` is the load-bearing one — `lode-76go` found it is emitted
 *after* `text.literal` in each line's highlight iteration order, so mapping it would win the colour
 attribute at render time and silently undo the code-block colour. The same ordering is used
 deliberately in the other direction for `punctuation.delimiter`, which lands after `text.literal`
@@ -65,7 +69,9 @@ and so dims the fence characters on top of the whole-line code span.
 the original `text.literal` colour was `magenta` (index 5), which is why it rendered harsh and why
 there was no way to soften it in place. The 256-colour names render consistently without requiring
 truecolor, so hex — which would have hardcoded a dark-background assumption — was not needed.
-Whether any of this should become user-configurable is open; see
+The table's five values are defaults that `[tui.theme.syntax]` can override (see the
+`[tui.theme]` row in [configuration.md](configuration.md#tui--theme-tuitheme-lode-cwyk)). The
+design record is the `lode-5zxt` entry ("User-configurable colour, revisited") in
 [decisions.md](decisions.md).
 
 **Why block-only.** `lode-ev5j.1`'s spike (verified against textual 8.2.8 + tree-sitter-markdown
