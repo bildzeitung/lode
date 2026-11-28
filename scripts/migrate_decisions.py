@@ -24,10 +24,12 @@ title and every status derived from a title with open wording:
   (``--seed`` makes a run repeatable).
 - ``date``: the first ISO date in the entry's title, else in its first
   paragraph, else anywhere in the entry, else the nearest dated entry's date.
-- ``status``: ``decided`` or ``open`` from the title's wording; an Update
-  marker that reads as a ruling turns an open entry decided. Both kinds of
-  wording in one title, or an open title with Updates none of which reads as a
-  ruling, is UNCLEAR: it gets ``open`` and is listed.
+- ``status``: ``decided`` or ``open`` from the title's and first paragraph's
+  wording (deferred, leaning, revisit, tune when are open); an Update marker
+  that reads as a ruling turns an open entry decided. Both kinds of wording in
+  one title, or open wording with Updates none of which reads as a ruling, is
+  UNCLEAR: it gets ``open`` and is listed. Entries whose status differs from
+  what the title alone gives are listed as TITLE DISAGREEMENTS.
 - ``supersedes`` and ``related`` are empty: the migration invents no edges.
 
 Also written: a mapping file (JSON) from every old heading anchor and every
@@ -61,9 +63,17 @@ _ID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
 _SLUG_MAX = 60
 
 # Status wording. A ruling marker is looked for in the 250 characters after an
-# Update's lead-in; deferred is deliberately in neither set (a decision to defer
-# is a decision).
+# Update's lead-in.
 _OPEN_RE = re.compile(r"\b(open|leaning|undecided|unsettled)\b", re.IGNORECASE)
+# Deferral wording, read in the title and the first paragraph: a deferred,
+# leaning or revisit-later entry is OPEN (lode-g311h, lode-m4rzt option A).
+_DEFER_RE = re.compile(
+    r"\b(deferred|leaning|revisit\w*|(?:must|should) be revisited|tune when|"
+    r"tuning|decide whether|undecided|unsettled|untuned)\b",
+    re.IGNORECASE,
+)
+# "left open" in prose reports a past state, so it is not open wording.
+_LEFT_OPEN_RE = re.compile(r"(?<=\S )left open\b", re.IGNORECASE)
 _DECIDED_RE = re.compile(
     r"\b(decided|decision|decisions|settled|accepted|ruled|ruling|resolved|built|"
     r"landed|done|rejected|withdrawn|fixed|closed|chosen|verified|approved)\b",
@@ -146,6 +156,7 @@ class Entry:
     date_source: str = ""
     status: str = "decided"
     status_unclear: str = ""
+    title_status: str = ""
     status_note: str = ""  # how a title with open wording was read, when not unclear
     entry_id: str = ""
     filename: str = ""
@@ -303,23 +314,35 @@ def _marker_texts(entry: Entry) -> list[str]:
     return [body[m.end() : m.end() + 250] for m in _MARKER_RE.finditer(body)]
 
 
-def derive_status(entry: Entry) -> None:
-    if not _OPEN_RE.search(entry.title):
-        entry.status = "decided"
-        return
-    entry.status = "open"
+def _settle(entry: Entry, open_wording: bool) -> tuple[str, str, str]:
+    """``(status, unclear, note)`` for an entry whose wording reads open or not."""
+    if not open_wording:
+        return "decided", "", ""
     if _DECIDED_RE.search(entry.title):
-        entry.status_unclear = "title has both open and decided wording"
-        return
+        return "open", "title has both open and decided wording", ""
     markers = _marker_texts(entry)
     ruling = next((t for t in markers if _RULING_RE.search(t)), None)
     if ruling is not None:
-        entry.status = "decided"
-        entry.status_note = f"by Update ({' '.join(ruling.split())[:50]}"
-    elif markers:
-        entry.status_unclear = "open title; Updates present, none reads as a ruling"
-    else:
-        entry.status_note = "no Update"
+        return "decided", "", f"by Update ({' '.join(ruling.split())[:50]}"
+    if markers:
+        return "open", "open wording; Updates present, none reads as a ruling", ""
+    return "open", "", "no Update"
+
+
+def derive_status(entry: Entry) -> None:
+    """Open wording is looked for in the title and the first paragraph.
+
+    ``title_status`` is what the title alone (``open``/``leaning``... as the
+    migration first read it) would give; a difference is listed for a hand check.
+    """
+    title = _LEFT_OPEN_RE.sub("", entry.title)
+    head = _LEFT_OPEN_RE.sub("", _first_paragraph(entry))
+    # The first paragraph's deferral wording is overridden by a decided title
+    # ("DECIDED ...: X, revisit if Y"); the title's own wording never is.
+    in_head = not _DECIDED_RE.search(title) and _DEFER_RE.search(head)
+    wording = bool(_OPEN_RE.search(title) or _DEFER_RE.search(title) or in_head)
+    entry.status, entry.status_unclear, entry.status_note = _settle(entry, wording)
+    entry.title_status = _settle(entry, bool(_OPEN_RE.search(entry.title)))[0]
 
 
 def assign_names(entries: list[Entry], rng: random.Random) -> None:
@@ -597,6 +620,15 @@ def render_report(
         f"({'UNCLEAR: ' + x.status_unclear if x.status_unclear else x.status_note}): "
         f"{x.title[:70]!r}"
         for x in worded
+    ]
+    differs = [x for x in e if x.status != x.title_status]
+    out += [
+        "",
+        f"TITLE DISAGREEMENTS ({len(differs)}, status differs from the title alone; hand check):",
+    ]
+    out += [
+        f"  line {x.start_line}: {x.title_status} -> {x.status}: {x.title[:70]!r}"
+        for x in differs
     ]
     guessed = [x for x in e if x.date_source != "title"]
     out += [

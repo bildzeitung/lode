@@ -301,3 +301,90 @@ def test_cli_refuses_a_target_that_already_holds_files(tmp_path: Path) -> None:
     result = runner.invoke(_mig.app, [str(FIXTURE), str(target)])
     assert result.exit_code == 2
     assert (target / "README.md").read_text() == "keep"
+
+
+def _status(entry_text: str) -> str:
+    return _mig.migrate("# t\n\n" + entry_text, overrides=()).entries[0]
+
+
+# Heads of the lode-m4rzt examples (decisions.md lines 59, 144, 151, 159, 173, 183, 270).
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "- **External refresh: on-access revalidation vs. scheduled background refresh.** "
+            "Leaning\n  **on-access with a short TTL cache** (2026-01-01).\n"
+        ),
+        (
+            "- **History compaction / squash policy.** Not needed for years; revisit if "
+            "storage matters. (2026-01-01)\n"
+        ),
+        (
+            "- **Cache rebuild cost is non-uniform** (2026-01-01). Embeddings rebuild "
+            "cheaply.\n  Decide whether to snapshot them.\n"
+        ),
+        (
+            "- **Span-annotation fuzzy re-anchor threshold** — tune when span annotations "
+            "are actually built. (2026-01-01)\n"
+        ),
+        (
+            "- **Faithfulness entailment threshold (ships untuned, must be revisited).** "
+            "v1 verifies (2026-01-01).\n"
+        ),
+        (
+            "- **Chunk size + overlap.** The fallback threshold and the overlap are tuning "
+            "knobs; tuning waits. (2026-01-01)\n"
+        ),
+        (
+            "- **Rerank model + threshold tuning.** Choosing/tuning the model waits until "
+            "there is a corpus. (2026-01-01)\n"
+        ),
+        (
+            "- **A repo-wide shared factory, or file-local helpers?** Leaning toward "
+            "file-local. (2026-01-01)\n"
+        ),
+    ],
+)
+def test_deferred_leaning_revisit_entries_derive_open(text: str) -> None:
+    entry = _status(text)
+    assert entry.status == "open"
+    assert entry.title_status == "decided"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "- **lode-3v1p (2026-07-20) closes the dirt-axis residual left open above: "
+            "git clean runs.** body\n"
+        ),
+        (
+            "- **2026-08-08 (`lode-oca9`) — re-cut the seam left open by `lode-r9z0`; both "
+            "candidates adopted.** body\n"
+        ),
+    ],
+)
+def test_left_open_phrase_in_a_title_is_not_open_wording(text: str) -> None:
+    entry = _status(text)
+    assert (entry.status, entry.title_status) == ("decided", "open")
+
+
+def test_a_title_that_starts_with_left_open_is_open() -> None:
+    assert (
+        _status("- **Left open: the web-fetch seam (2026-01-01).** body\n").status
+        == "open"
+    )
+
+
+def test_decided_title_beats_deferral_wording_in_the_first_paragraph() -> None:
+    entry = _status("- **DECIDED (2026-01-01): X.** Revisit only if Y shows up.\n")
+    assert entry.status == "decided"
+
+
+def test_report_lists_title_disagreements() -> None:
+    result = _mig.migrate(
+        "# t\n\n- **Chunk size (2026-01-01).** Tuning waits.\n", overrides=()
+    )
+    report = _mig.render_report(result, [], None)
+    assert "TITLE DISAGREEMENTS (1" in report
+    assert "decided -> open" in report
