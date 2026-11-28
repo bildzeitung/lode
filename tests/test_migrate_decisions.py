@@ -133,6 +133,44 @@ def test_verify_catches_a_body_that_was_edited(tmp_path: Path) -> None:
     assert any("differ" in p for p in _mig.verify(tmp_path / "out", result))
 
 
+def test_verify_catches_a_moved_block_outside_its_target(tmp_path: Path) -> None:
+    result = _mig.migrate(_text(), overrides=(MOVE, DROP), rng=random.Random(0))
+    _write(result, tmp_path / "out")
+    moved = next(a for a in result.applied if a.override is MOVE)
+    home = tmp_path / "out" / _by_title(result, "Cache sizing").filename
+    other = tmp_path / "out" / _by_title(result, "Retry policy").filename
+    home.write_text(home.read_text().replace(moved.text, ""))
+    other.write_text(other.read_text() + moved.text)
+    problems = _mig.verify(tmp_path / "out", result)
+    assert any("not in its target entry" in p for p in problems)
+
+
+# Lines 7 and 8 are markers in the B section; the override moves line 7's to A,
+# which shortens B by one line and lengthens A by one.
+_SHIFTED = (
+    "# t\n\n"
+    "- **A (lode-a1, 2026-01-01).** x\n\n"
+    "## B (lode-b1)\n\n"
+    "  **Update (lode-a1, 2026-01-02):** misfiled, it belongs to the lode-a1 entry.\n"
+    "  **Update (lode-a1, 2026-01-03):** stays here.\n\n"
+    "### Tail heading\n"
+)
+_SHIFT = _mig.Override(
+    "move", "lode-b1", "**Update (lode-a1, 2026-01-02)", "misfiled", target="lode-a1"
+)
+
+
+def test_an_override_leaves_suspect_lines_and_the_mapping_on_source_lines() -> None:
+    result = _mig.migrate(_SHIFTED, overrides=(_SHIFT,), rng=random.Random(0))
+    (moved,) = result.applied
+    assert moved.source_line == 7
+    # The moved marker is the override table's; the one after it keeps line 8.
+    assert [s.split(" (")[0] for s in result.suspects] == ["line 8"]
+    section = _by_title(result, "B (lode-b1)")
+    tail = next(r for r in result.mapping if r["old_anchor"] == "tail-heading")
+    assert (tail["old_line"], tail["new_file"]) == (10, section.filename)
+
+
 def test_verify_catches_a_missing_file(tmp_path: Path) -> None:
     result = _mig.migrate(_text(), overrides=(), rng=random.Random(0))
     _write(result, tmp_path / "out")
@@ -151,9 +189,11 @@ def test_status_and_dates_are_derived_from_the_head() -> None:
     )
     assert _by_title(result, "Retry policy").date_source == "first paragraph"
     assert _by_title(result, "Retry policy").date == "2026-02-03"
+    assert cache.status_note.startswith("decided by Update (lode-aaa2")
     rotation = _by_title(result, "log rotation")
     assert rotation.status == "open"
     assert not rotation.status_unclear
+    assert rotation.status_note == "open title, no Update"
     assert rotation.date_source == "inferred from a neighbour"
     assert rotation.date == "2026-02-03"
     assert _by_title(result, "Fenced example").status == "decided"
@@ -241,7 +281,12 @@ def test_cli_writes_entries_and_mapping_and_prints_the_report(
     assert result.exit_code == 0, result.output
     assert "VERIFY: ok" in result.output
     assert "OVERRIDE TABLE" in result.output
+    assert "(3 lines from line 38)" in result.output
     assert "SUSPECTS" in result.output
+    assert "Every title with open wording (2):" in result.output
+    assert "line 13: open (open title, no Update)" in result.output
+    # A date found past the title is listed as a guess.
+    assert "line 10: 2026-02-03 (first paragraph)" in result.output
     assert len(list(target.glob("*.md"))) == 9
     assert json.loads(mapping.read_text())
 

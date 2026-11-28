@@ -17,7 +17,8 @@ entry it corrects, or dropped as obsolete. :func:`verify` re-reads the written
 files and checks that, so a run that prints ``VERIFY: ok`` has proved the
 counts and the bytes.
 
-Frontmatter, derived mechanically (the report lists every guess):
+Frontmatter, derived mechanically. The report lists every date not taken from a
+title and every status derived from a title with open wording:
 
 - ``id``: random, 5 lowercase base36 characters, unique within the run
   (``--seed`` makes a run repeatable).
@@ -63,9 +64,7 @@ _SLUG_MAX = 60
 # Status wording. A ruling marker is looked for in the 250 characters after an
 # Update's lead-in; deferred is deliberately in neither set (a decision to defer
 # is a decision).
-_OPEN_RE = re.compile(
-    r"\b(open|leaning|undecided|unsettled|left open)\b", re.IGNORECASE
-)
+_OPEN_RE = re.compile(r"\b(open|leaning|undecided|unsettled)\b", re.IGNORECASE)
 _DECIDED_RE = re.compile(
     r"\b(decided|decision|decisions|settled|accepted|ruled|ruling|resolved|built|"
     r"landed|done|rejected|withdrawn|fixed|closed|chosen|verified|approved)\b",
@@ -147,6 +146,7 @@ class Entry:
     date_source: str = ""
     status: str = "decided"
     status_unclear: str = ""
+    status_note: str = ""  # how a title with open wording was read, when not unclear
     entry_id: str = ""
     filename: str = ""
 
@@ -157,6 +157,7 @@ class Applied:
     source_entry: Entry
     target_entry: Entry | None
     text: str
+    source_line: int  # 1-based source line of the block's marker
 
 
 @dataclass
@@ -241,7 +242,9 @@ def apply_overrides(
         target = find_entry(entries, ov.target) if ov.target else None
         located.append((ov, source, lo, hi, target))
     applied = [
-        Applied(ov, source, target, "".join(source.lines[lo:hi]))
+        Applied(
+            ov, source, target, "".join(source.lines[lo:hi]), source.start_line + lo
+        )
         for ov, source, lo, hi, target in located
     ]
     removals = sorted(
@@ -301,21 +304,22 @@ def _marker_texts(entry: Entry) -> list[str]:
 
 
 def derive_status(entry: Entry) -> None:
-    opens, decided = _OPEN_RE.search(entry.title), _DECIDED_RE.search(entry.title)
-    if opens and decided:
-        entry.status = "open"
+    if not _OPEN_RE.search(entry.title):
+        entry.status = "decided"
+        return
+    entry.status = "open"
+    if _DECIDED_RE.search(entry.title):
         entry.status_unclear = "title has both open and decided wording"
         return
-    if not opens:
-        entry.status = "decided"
-        return
     markers = _marker_texts(entry)
-    if any(_RULING_RE.search(t) for t in markers):
+    ruling = next((t for t in markers if _RULING_RE.search(t)), None)
+    if ruling is not None:
         entry.status = "decided"
+        entry.status_note = f"decided by Update ({' '.join(ruling.split())[:50]}"
+    elif markers:
+        entry.status_unclear = "open title; Updates present, none reads as a ruling"
     else:
-        entry.status = "open"
-        if markers:
-            entry.status_unclear = "open title; Updates present, none reads as a ruling"
+        entry.status_note = "open title, no Update"
 
 
 def assign_names(
@@ -389,10 +393,12 @@ def build_mapping(text: str, entries: list[Entry], preamble_lines: int) -> list[
     title -> its new file. Anchors repeat as GitHub numbers them (-1, -2)."""
     lines = text.splitlines(keepends=True)
     inside = fence_flags(lines)
+    # From the start lines, not ``len(entry.lines)``: an override has changed
+    # the length of the entries it touched.
     owner: list[Entry | None] = [None] * len(lines)
-    for entry in entries:
-        for k in range(len(entry.lines)):
-            owner[entry.start_line - 1 + k] = entry
+    bounds = [*(e.start_line - 1 for e in entries), len(lines)]
+    for entry, (lo, hi) in zip(entries, pairwise(bounds), strict=True):
+        owner[lo:hi] = [entry] * (hi - lo)
     seen: dict[str, int] = {}
     rows = []
     for i, line in enumerate(lines):
@@ -437,15 +443,18 @@ def migrate(
         raise ValueError("no entries found")
     source_body = "".join(text.splitlines(keepends=True)[preamble_lines:])
     result = Result(preamble_lines, entries, source_body=source_body)
+    # Before the overrides, so each suspect's line number is its source line.
+    suspects = find_suspects(entries)
     result.applied = apply_overrides(
         entries, OVERRIDES if overrides is None else overrides
     )
+    handled = tuple(f"line {a.source_line} " for a in result.applied)
+    result.suspects = [s for s in suspects if not s.startswith(handled)]
     for entry in entries:
         derive_date(entry)
         derive_status(entry)
     fill_missing_dates(entries)
     assign_names(entries, rng or secrets.SystemRandom())
-    result.suspects = find_suspects(entries)
     result.mapping = build_mapping(text, entries, preamble_lines)
     return result
 
@@ -458,17 +467,20 @@ def _strip_frontmatter(text: str) -> str:
 
 def verify(target: Path, result: Result) -> list[str]:
     """Re-read the written files and check: one file per entry, every Update
-    marker accounted for (override-moved ones at their new home, dropped ones
-    listed), and the bodies equal the source minus preamble minus the
+    marker accounted for (dropped ones listed), each moved block in its target
+    entry's file, and the bodies equal the source minus preamble minus the
     override-affected blocks."""
     problems = []
     names = sorted(p.name for p in target.glob("*.md") if p.name != "README.md")
     if names != sorted(e.filename for e in result.entries):
         return [f"{len(names)} files out for {len(result.entries)} entries in"]
-    actual = "".join(
-        _strip_frontmatter((target / e.filename).read_text(encoding="utf-8"))
+    bodies = {
+        e.filename: _strip_frontmatter(
+            (target / e.filename).read_text(encoding="utf-8")
+        )
         for e in result.entries
-    )
+    }
+    actual = "".join(bodies.values())
     markers_in = len(_MARKER_RE.findall(result.source_body))
     dropped = sum(
         len(_MARKER_RE.findall(a.text))
@@ -487,6 +499,10 @@ def verify(target: Path, result: Result) -> list[str]:
             continue
         expected = expected.replace(a.text, "", 1)
         if a.target_entry is not None:
+            if a.text not in bodies[a.target_entry.filename]:
+                problems.append(
+                    f"moved block {a.override.marker!r} is not in its target entry"
+                )
             if actual.count(a.text) != 1:
                 problems.append(f"moved block {a.override.marker!r} is not unique")
                 continue
@@ -542,30 +558,35 @@ def render_report(
             else "dropped"
         )
         out.append(
-            f"  {a.override.action} {a.override.marker!r} from entry at line "
-            f"{a.source_entry.start_line} ({dest}): {a.override.reason}"
+            f"  {a.override.action} {a.override.marker!r} "
+            f"({len(a.text.splitlines())} lines from line {a.source_line}) from "
+            f"entry at line {a.source_entry.start_line} ({dest}): {a.override.reason}"
         )
     out += [
         "",
         f"SUSPECTS ({len(result.suspects)}, for the reviewer to add or reject):",
     ]
     out += [f"  {s}" for s in result.suspects]
-    unclear = [x for x in e if x.status_unclear]
+    worded = [x for x in e if x.status_unclear or x.status_note]
     out += [
         "",
         (
             f"STATUS: {sum(x.status == 'open' for x in e)} open, "
             f"{sum(x.status == 'decided' for x in e)} decided; "
-            f"UNCLEAR ({len(unclear)}, defaulted to open):"
+            f"{sum(bool(x.status_unclear) for x in e)} UNCLEAR, defaulted to open. "
+            f"Every title with open wording ({len(worded)}):"
         ),
     ]
     out += [
-        f"  line {x.start_line}: {x.status_unclear}: {x.title[:70]!r}" for x in unclear
+        f"  line {x.start_line}: {x.status} "
+        f"({'UNCLEAR: ' + x.status_unclear if x.status_unclear else x.status_note}): "
+        f"{x.title[:70]!r}"
+        for x in worded
     ]
-    guessed = [x for x in e if x.date_source not in ("title", "first paragraph")]
+    guessed = [x for x in e if x.date_source != "title"]
     out += [
         "",
-        f"DATES: {len(e) - len(guessed)} from the head; {len(guessed)} guessed:",
+        f"DATES: {len(e) - len(guessed)} from the title; {len(guessed)} guessed:",
     ]
     out += [
         f"  line {x.start_line}: {x.date} ({x.date_source}): {x.title[:60]!r}"
