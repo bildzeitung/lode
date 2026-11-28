@@ -239,6 +239,15 @@ keeps nothing. Textual makes such calls (its mouse hit-testing calls `render_lin
 stores what they return in its line cache, and one can come after an edit and before the repaint,
 so a memo kept from the last pass could put a wrong underline on screen until the next edit.
 
+Keying the fence memo on the document lines instead (a shallow copy of `document.lines`, a rescan
+only when `lines != copy`) was measured and declined (`lode-r8orn`): it would save one scan per
+uncached pass (0.56 ms at 2,000 lines, 5.8 ms at 20,000) but costs a second invalidation rule beside
+the `render_lines` bracket, which stays for the lint-range memo, and when `load_text` replaces the
+buffer with equal text in new string objects (0 of 2,000 rows reused) each `get_line` pays a
+by-value comparison of 13.5 us at 2,000 lines and 269 us at 20,000, so a 38-row pass costs as much
+as the scan at 2,000 lines and more than it at 20,000. (Median of 200 runs of 20 on a loaded
+machine, load average 8 to 10; an edit, undo or redo keeps every untouched row's string object.)
+
 **Rules (v1).** Hand-rolled pure functions over `(lines, index, fence context, cursor)` returning
 character ranges `[start, end)` on that line; no new dependency (no `pymarkdownlnt`). `cursor` is
 the caret's `(row, column)`, read only by MD009. Textual already re-fetches the line the caret
