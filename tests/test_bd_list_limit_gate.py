@@ -190,7 +190,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `.claude` half is lode-9bbq's scope correction: AC1's original scope
 # (`.claude/skills/**/SKILL.md` + `scripts/*.sh`) excluded `.claude/statusline.sh`
 # itself, the exact site that motivated this ticket.
-SH_GLOB_DIRS = [REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
+SH_GLOB_DIRS = [REPO_ROOT, REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
 
 # Markdown that a Claude Code agent executes bash out of: skills and subagent
 # definitions alike (see the module docstring's scan-surface section). Local
