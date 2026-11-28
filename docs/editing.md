@@ -187,8 +187,9 @@ items parked in editing.md") links to it and cannot be repointed. -->
 
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
 **editable** note bodies, updated as you type. **This section is the settled design, only partly
-shipped:** the rule engine is built (`src/lode/markdown_lint.py`, `lode-o7pf.2`), but the widget
-(`lode-o7pf.3`) and the wiring (`lode-o7pf.4`) are not, so no screen draws an underline yet. The
+shipped:** the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`) and the widget
+(`LintTextArea` in `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) are built, but the
+wiring (`lode-o7pf.4`) is not, so no screen draws an underline yet. The
 Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
@@ -226,7 +227,11 @@ not only an edit.
 `match_fence_marker`), the repo's one sanctioned CommonMark fence scanner. `fence_flags` is
 whole-buffer O(n), so its result is memoized for **one render pass**: built on the first `get_line`
 call of the pass and dropped when the pass ends (a `render_lines` override brackets a pass), so a
-repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Lines
+repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Only a
+pass keeps the memo: a `get_line` call outside one scans the fences itself and keeps nothing.
+Textual makes such calls (its mouse hit-testing calls `render_line` directly) and stores what they
+return in its line cache, and one can come after an edit and before the repaint, so flags kept from
+the last pass could put a wrong underline on screen until the next edit. Lines
 inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
 opener as outside, so the opener is checked with `match_fence_marker`).
 
