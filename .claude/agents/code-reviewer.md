@@ -166,7 +166,7 @@ stopping (it happened to complete the review correctly that one time — trunk w
 that was a lucky improvisation, not a mechanism). This is the first thing I run, via
 `scripts/start-guards.sh` (lode-fg7w7.4), one call that runs `scripts/isolation-guard.sh` (lode-ska2)
 and then, only if it passes, `scripts/recycled-worktree-guard.sh` (the second guard, below), stopping
-at the first refusal:
+at the first nonzero exit:
 
 ```bash
 scripts/start-guards.sh "before my own fetch+checkout"
@@ -192,9 +192,11 @@ and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA f
 the copy is mine to get right. The diagnostics the old `|| echo "BOOTSTRAP GAP …"` tails printed live
 here instead: exit 127 / "No such file or directory" (or 126 / "Permission denied" — the script is
 there but lost its exec bit) = **bootstrap gap** (this checkout may predate the script landing on
-trunk) = stop and report; exit 3 = `isolation-guard.sh` ran and refused (the recycled guard did not
-run); exit 4 = `recycled-worktree-guard.sh` ran and refused after isolation passed; either printed its
-own diagnostic just above the wrapper's line.
+trunk) = stop and report; exit 1 = the script ran and printed its own diagnostic. From
+`scripts/start-guards.sh`: exit 3 = `isolation-guard.sh` exited nonzero (the recycled guard did not
+run); exit 4 = isolation passed and `recycled-worktree-guard.sh` exited nonzero. I report the guard's
+own diagnostic and the wrapper's line below it, which names the guard's own status ([how to read
+it](../../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)).
 
 **On a failure here, I stop — full stop.** I do **not** retry `EnterWorktree`, I do **not** attempt
 `git worktree add` + `git -C` as a self-rescue, and I do not review anything. This is a deliberate,
@@ -237,8 +239,8 @@ untracked leftovers swept before they can pollute the `git status --short` asser
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
 (`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely missing
-or non-executable script (bootstrap gap — report and stop) from the script running and legitimately
-exiting 1 (already reported by the script itself).
+or non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
+nonzero exit (3 or 4, already explained by the guard itself).
 
 This never conflicts with checking out `land/<id>` next — that's exactly this step's own job; the
 guard only cleans up the *starting* state before that intentional checkout happens. If it fires, I

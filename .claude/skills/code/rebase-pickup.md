@@ -34,17 +34,18 @@ observed handing a dispatched agent NO worktree at all — cwd pinned to the mai
 root, on `trunk` — a distinct, more severe failure than the recycled-worktree case below. This is the
 first executable action of this cycle too, via `scripts/start-guards.sh` (lode-fg7w7.4), which runs
 `scripts/isolation-guard.sh` (lode-ska2) and then, only if it passes, the recycled-worktree guard
-described after this block, stopping at the first refusal:
+described after this block, stopping at the first nonzero exit:
 
 ```bash
 scripts/start-guards.sh "before my own fetch+checkout"
 ```
 
-A nonzero exit is a **stop**. Exit 3 = the isolation guard refused (the recycled guard did not run),
-exit 4 = the recycled guard refused after isolation passed; the refusing script printed its own
-diagnostic above the wrapper's line. An exit 127 / "No such file or directory" is the **bootstrap
-gap** — this checkout may predate the script landing on trunk — and is a stop too: report it and do
-not proceed.
+A nonzero exit is a **stop**. Exit 3 = the isolation guard exited nonzero (the recycled guard did not
+run), exit 4 = isolation passed and the recycled guard exited nonzero. I report the guard's own
+diagnostic and the wrapper's line below it, which names the guard's own status ([how to read
+it](../../../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)). An exit 127 /
+"No such file or directory" is the **bootstrap gap** — this checkout may predate the script landing
+on trunk — and is a stop too: report it and do not proceed.
 
 On a failure here I stop — full stop, same as the fresh-build cycle: no `EnterWorktree` retry, no
 `git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
@@ -77,7 +78,7 @@ run; full reasoning in the script's own header and [docs/decisions.md](../../../
 (`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
-refusal (exit 3 or 4, already explained by the guard itself).
+nonzero exit (3 or 4, already explained by the guard itself).
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout

@@ -68,9 +68,9 @@ shouldn't write; for me it means landing in the **lander's own main checkout on 
 tree `/land` is about to merge the accepted set into a few steps later, which is precisely how the
 non-isolated incident recounted above dirtied it (a staged full branch diff that the next merge
 misread as a conflict). My own verdict stays correct either way, since I never check anything out;
-what is at risk is `/land`'s merge, so this is the first thing I run, via `scripts/start-guards.sh` (lode-fg7w7.4), one call that runs
-`scripts/isolation-guard.sh` and then, only if it passes, the recycled-worktree guard described below,
-stopping at the first refusal:
+what is at risk is `/land`'s merge, so this is the first thing I run, via `scripts/start-guards.sh`
+(lode-fg7w7.4), one call that runs `scripts/isolation-guard.sh` and then, only if it passes, the
+recycled-worktree guard described below, stopping at the first nonzero exit:
 
 ```bash
 scripts/start-guards.sh "before any fetch/diff work"
@@ -87,9 +87,11 @@ from the earlier call's output**, never typed from memory or a prefix ([Derive i
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)). The diagnostics the old
 `|| echo "BOOTSTRAP GAP …"` tails printed live here instead: exit 127 / "No such file or directory"
 (or 126 / "Permission denied" — the script is there but lost its exec bit) = **bootstrap gap** (this
-checkout may predate the script landing on trunk) = stop and report; exit 3 = `isolation-guard.sh` ran and refused (the recycled guard did not
-run); exit 4 = `recycled-worktree-guard.sh` ran and refused after isolation passed; either printed its
-own diagnostic just above the wrapper's line.
+checkout may predate the script landing on trunk) = stop and report; exit 1 = the script ran and
+printed its own diagnostic. From `scripts/start-guards.sh`: exit 3 = `isolation-guard.sh` exited
+nonzero (the recycled guard did not run); exit 4 = isolation passed and `recycled-worktree-guard.sh`
+exited nonzero. I report the guard's own diagnostic and the wrapper's line below it, which names the
+guard's own status ([how to read it](../../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)).
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
 fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
@@ -125,7 +127,7 @@ fails to take; the `rescue/` branch matters because the ref being rewound belong
 ticket** — tagging `HEAD` first keeps that ticket's unpushed commits recoverable rather than silently
 destroyed. Exit 127 (missing) or 126 (not executable) distinguishes a genuinely missing or
 non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
-refusal (exit 3 or 4, already explained by the guard itself). If it fires, I report it
+nonzero exit (3 or 4, already explained by the guard itself). If the guard fires, I report it
 explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
 `trunk` — either because it started that way or because I just reset it there — so my worktree needs

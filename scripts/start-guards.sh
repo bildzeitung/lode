@@ -20,8 +20,14 @@
 #           named in the diagnostic). STOP AND REPORT.
 #
 # 3 and 4 are chosen to avoid 1 and 2, which both guards use, so the caller can tell WHICH guard
-# refused from the status alone. A wrapper that cannot be found or run exits 127 / 126 as for any
+# stopped the cycle from the status alone. They do not say WHY: a guard's exit 1 (refused) and its
+# exit 2 (could not run -- never a verdict on the worktree) both map to the same 3 or 4, so the
+# diagnostic names the guard's own status, and 127 / 126 there means the sibling script itself is
+# missing or not executable. A wrapper that cannot be found or run exits 127 / 126 as for any
 # script: a bootstrap gap, also STOP AND REPORT.
+#
+# The guards' own 0/1/2 contract, and this wrapper's place beside it:
+# docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni
 
 set -euo pipefail
 
@@ -36,15 +42,15 @@ here="$(dirname "${BASH_SOURCE[0]}")"
 status=0
 "$here/isolation-guard.sh" || status=$?
 if [ "$status" -ne 0 ]; then
-  echo "start-guards: isolation-guard.sh REFUSED (exit $status) -- recycled-worktree-guard.sh did" \
-       "not run. STOP AND REPORT." >&2
+  echo "start-guards: isolation-guard.sh exited $status (its own message is above) --" \
+       "recycled-worktree-guard.sh did not run. STOP AND REPORT." >&2
   exit 3
 fi
 
 status=0
 "$here/recycled-worktree-guard.sh" "$context_message" || status=$?
 if [ "$status" -ne 0 ]; then
-  echo "start-guards: recycled-worktree-guard.sh REFUSED (exit $status) -- isolation-guard.sh had" \
-       "passed. STOP AND REPORT." >&2
+  echo "start-guards: recycled-worktree-guard.sh exited $status (its own message is above) --" \
+       "isolation-guard.sh had passed. STOP AND REPORT." >&2
   exit 4
 fi

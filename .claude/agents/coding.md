@@ -227,18 +227,20 @@ even then the incident's own agent invented an unsanctioned `git worktree add` +
 rather than actually stopping. This is the FIRST executable action of my cycle, ahead of even reading
 my own branch name, via `scripts/start-guards.sh` (lode-fg7w7.4), one call that runs
 `scripts/isolation-guard.sh` (lode-ska2) and then `scripts/recycled-worktree-guard.sh` (lode-ivth) —
-the two stay distinct, shellcheck'd, unit-tested siblings — and stops at the first one that refuses.
+the two stay distinct, shellcheck'd, unit-tested siblings — and stops at the first one that exits
+nonzero.
 Its context argument is the recycled guard's context message (the second guard, below):
 
 ```bash
 scripts/start-guards.sh "before doing any work"
 ```
 
-A nonzero exit is a **stop**. Exit **3** = `isolation-guard.sh` refused (the recycled guard did not
-run) and exit **4** = `recycled-worktree-guard.sh` refused after isolation passed; the wrapper's
-stderr names the refusing guard and its own status, printed just above the wrapper's line. Exit 2 is
-a usage error. An exit 127 / "No such file or directory" is the **bootstrap gap** — this checkout may
-predate the script landing on trunk — and is a stop too: report it and do not proceed.
+A nonzero exit is a **stop**. Exit **3** = `isolation-guard.sh` exited nonzero (the recycled guard
+did not run), exit **4** = isolation passed and `recycled-worktree-guard.sh` exited nonzero, exit 2 =
+a usage error. I report the guard's own diagnostic and the wrapper's line below it, which names the
+guard's own status ([how to read it](../../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)).
+An exit 127 / "No such file or directory" is the **bootstrap gap** — this checkout may predate the
+script landing on trunk — and is a stop too: report it and do not proceed.
 
 **On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do
 **not** attempt `git worktree add` + `git -C` as a self-rescue, and I do not run `Edit`/`Write`/`nox`
@@ -275,8 +277,8 @@ scripts themselves are read FROM this worktree — a worktree recycled from a br
 landed on trunk would not have them on disk at all, and silently proceeding as if nothing were wrong
 is exactly the failure mode this whole guard exists to prevent. Exit 127 / "No such file or directory"
 (script missing) or 126 / "Permission denied" (not executable) means exactly that — report and stop;
-exit 4 from the wrapper means the recycled guard *ran* and refused (it has already printed its own
-diagnostic). Either way I stop.
+exit 4 from the wrapper means the recycled guard *ran* and exited nonzero (it has already printed its
+own diagnostic). Either way I stop.
 
 **The script's `case "$TOP" in */.claude/worktrees/*)` guard is placed in the same block as the
 destructive command it protects** — a `case` that `exit 1`s cannot be skipped or hand-waved under
