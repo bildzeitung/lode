@@ -125,7 +125,7 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # set. Whether these hand-written pins should share one mechanism was decided
 # (rejected extraction, in favor of shared discipline instead) in
 # docs/decisions.md
-# (uv run --frozen python scripts/docs_index_query.py "lode-7zap"). Do not re-litigate here.
+# (grep -rn "lode-7zap" docs/). Do not re-litigate here.
 #
 # DECISION (lode-eu04): `_dead_allowlist_entries`' live set also ignored
 # `_unguarded_mutations`' BLOCK-level guard state (a key reachable only inside

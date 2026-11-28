@@ -1036,6 +1036,38 @@ def test_real_repo_passes_the_gate():
     assert errors == [], "broken link(s):\n" + "\n".join(str(e) for e in errors)
 
 
+def test_historical_dead_link_is_excused_for_its_named_pair_only(tmp_path, monkeypatch):
+    """The same destination written in another file, and another dead link in
+    the excused file, are still reported."""
+    monkeypatch.setattr(
+        check_links, "HISTORICAL_DEAD_LINKS", {(f"{_DOCS}/log.md", "gone.py")}
+    )
+    _write(tmp_path, f"{_DOCS}/log.md", "[gone](gone.py) [also gone](nope.md)\n")
+    _write(tmp_path, f"{_DOCS}/other.md", "[gone](gone.py)\n")
+    _git_init(tmp_path)
+
+    assert [(e.source.name, e.target) for e in check(tmp_path)] == [
+        ("log.md", "nope.md"),
+        ("other.md", "gone.py"),
+    ]
+
+
+def test_every_historical_dead_link_still_excuses_something(monkeypatch):
+    """With nothing excused the gate reports exactly the excused pairs, each as
+    a missing file. A pair it does not report excuses nothing, and would hide
+    the next dead link of that name."""
+    excused = check_links.HISTORICAL_DEAD_LINKS
+    monkeypatch.setattr(check_links, "HISTORICAL_DEAD_LINKS", frozenset())
+
+    reported = {
+        (e.source.relative_to(REPO_ROOT).as_posix(), e.target)
+        for e in check(REPO_ROOT)
+        if e.reason == check_links._NO_SUCH_FILE
+    }
+
+    assert reported == excused
+
+
 def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path):
     _write(tmp_path, f"{_DOCS}/a.md", "line one\nSee [missing](nope.md) here.\n")
     _git_init(tmp_path)

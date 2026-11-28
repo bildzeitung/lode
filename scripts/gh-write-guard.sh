@@ -148,7 +148,7 @@ case "$CMD" in
 esac
 
 # SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
-# per-character cost without bound. Enforcement lives in the shared library alongside the
+# per-byte cost without bound. Enforcement lives in the shared library alongside the
 # constant (review, lode-rjqm), so this guard and sha-fabrication-guard.sh cannot drift.
 # Measured on `$CMD_SANITIZED`, i.e. exactly the string handed to `_split_unquoted` below --
 # see that function's header, and docs/agents-workflow.md for the (a)/(b)/(c) decision.

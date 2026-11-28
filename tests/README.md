@@ -34,8 +34,8 @@ assert properties about the *shell semantics* of that embedded bash, not about p
   shipped once for real (`lode-sfnb`: a populated `declare -A MSG` in one block, read back two blocks
   later, silently expanded to empty and broke `git merge -m ''` with no error output at all).
 - **`tests/test_fence_parsing.py`** — direct unit tests for the one shared, importable fence parser
-  (`src/lode/fence_parsing.py`) that `scripts/docs_index_chunker.py` and `tests/conftest.py`'s own
-  `fence_scan` helper both build on, so "what counts as a fenced code block" is answered once, not
+  (`src/lode/fence_parsing.py`) that `tests/conftest.py`'s own `fence_scan` helper and the
+  production fence scanners build on, so "what counts as a fenced code block" is answered once, not
   reimplemented per gate. `tests/test_no_private_fence_state_machine.py` is the companion AST gate:
   no module may hand-roll a second, private fence-toggle state machine instead of importing this one.
   Several of the Markdown scanners below still carry private copies of similar parsing logic rather
@@ -73,8 +73,7 @@ assert properties about the *shell semantics* of that embedded bash, not about p
   a test file.
 - **`tests/test_keybindings_doc.py`**, **`tests/test_check_docstring_refs.py`**,
   **`tests/test_check_links.py`**, **`tests/test_cli_help_corpus_gate.py`**,
-  **`tests/test_decisions_supersession_markers.py`**, **`tests/test_decisions_no_silent_rewrite_guard.py`**,
-  **`tests/test_docs_index_never_tracked.py`** — the general family of doc/prose-as-source-of-truth
+  **`tests/test_decisions_supersession_markers.py`**, **`tests/test_decisions_no_silent_rewrite_guard.py`** — the general family of doc/prose-as-source-of-truth
   gates: these parse `docs/*.md` (not SKILL.md bash specifically) to keep a table, a link, a citation,
   or a supersession marker honest against the code or tickets it describes. Same underlying reason as
   the SKILL.md scanners — Markdown that encodes a real invariant is not something `ruff`/`mypy`/pytest's
@@ -147,10 +146,6 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
   `test_dep_churn_lib.py`, `test_deps_declared.py`, `test_noxfile_venv_tool.py`,
   `test_nox_session_inventory.py` — `scripts/release.sh`'s pieces, the fastembed model-cache identity
   pinned against drift, and dependency/nox-session hygiene gates.
-- **docs-index tool** — `test_docs_index_build.py`, `test_docs_index_chunker.py`,
-  `test_docs_index_query.py`, `test_docs_index_never_tracked.py` — the on-demand FTS5 lookup index
-  over `docs/*.md` (`scripts/docs_index_*.py`) that `CLAUDE.md` directs "what did we decide about X"
-  questions through, plus the gate keeping its index file untracked.
 - **`docs/decisions.md` machinery** — `test_decisions_supersession_markers.py`,
   `test_decisions_no_silent_rewrite_guard.py`, `test_decisions_union_merge_driver.py` — the
   append-only supersession convention that file's own preamble mandates, and the git union-merge

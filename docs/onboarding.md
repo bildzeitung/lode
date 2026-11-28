@@ -23,8 +23,8 @@ work on lode faster, for humans and agents alike:
 | Tool | Why | Notes |
 |---|---|---|
 | **fd** | Fast, gitignore-aware file finding — the `find` counterpart to ripgrep for "list files matching X, excluding `.venv/` and `.claude/worktrees/`" sweeps. | Debian/Ubuntu package `fd-find` installs the binary as **`fdfind`**; symlink or alias to `fd` if you want the short name. `apt-get install fd-find` / `brew install fd`. |
-| **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores and the on-demand docs FTS5 index — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
-| **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval, docs-index rebuild — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
+| **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
+| **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
 
 ## Install & setup
 
@@ -196,14 +196,15 @@ cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2
 
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./.venv`**, not an isolated
 env, so run it as `uv run --frozen nox ...`. `nox -t fix` and `nox -s tests` are the two entry
-points REQUIRED before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
-invocation also runs `nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`,
-`nox -s decisions_entries`, and `nox -s docs` (seven sessions total; see
-[`noxfile.py`](../noxfile.py)'s module docstring for what those five check):
+points you will use most; the gates a merge to `trunk` owes are in
+[CLAUDE.md](../CLAUDE.md#python-environment). A bare `nox` invocation also runs
+`nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`, `nox -s decisions_entries`, and
+`nox -s docs` (seven sessions total; see [`noxfile.py`](../noxfile.py)'s module docstring for what
+those five check):
 
 ```bash
 uv run --frozen nox -t fix    # ruff format + ruff check --fix
-uv run --frozen nox -s tests  # FULL suite, no marker filter — must be green before any merge
+uv run --frozen nox -s tests  # FULL suite, no marker filter
 ```
 
 `nox -s tests` is what `/land` re-runs before trunk; nothing is ever skipped from it. A
@@ -296,7 +297,8 @@ Four project rules that bite newcomers; [CLAUDE.md](../CLAUDE.md) is authoritati
   git worktree under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef:
   "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually
   small, never measured). Merge back with `--no-ff`.
-- **Gate before merging:** `nox -t fix` and `nox -s tests`.
+- **Gate every merge to `trunk` before pushing it:** the gates are listed in
+  [CLAUDE.md](../CLAUDE.md#python-environment).
 - **A pre-commit hook re-exports and stages `.beads/issues.jsonl` on every commit.** Stage
   explicit paths — never `git add -A`.
 - **Close the session by pushing both wires:** `git push` *and* `bd dolt push`.

@@ -70,7 +70,6 @@ EXCLUDED = {
     "land-escalation-runbook.md",
     "stack.md",
     "conventions.md",
-    "docs-index.md",
     "release.md",
     "test-suite-audit.md",
     "onboarding.md",
