@@ -131,11 +131,13 @@
 # guard must run FIRST, in a possibly-contaminated worktree, so this very
 # script is read FROM that tree. A worktree recycled from a branch cut
 # before this script landed on trunk would not have it on disk at all. The
-# call site is a bare `scripts/recycled-worktree-guard.sh "<context>"` run
-# from the worktree root: the harness's worktree-isolation classifier refuses
-# an isolated agent a `TOP=$(git rev-parse --show-toplevel)` carried into a
-# later command and a `|| { ...; }` tail (lode-fvg0), so no wrapper can test
-# for the script or print a diagnostic.
+# call site is a bare `scripts/start-guards.sh "<context>"` run from the
+# worktree root, which runs scripts/isolation-guard.sh and then this script
+# (lode-fg7w7.4) and is read from the same tree: the harness's
+# worktree-isolation classifier refuses an isolated agent a
+# `TOP=$(git rev-parse --show-toplevel)` carried into a later command and a
+# `|| { ...; }` tail (lode-fvg0), so nothing in the agent's own call can test
+# for a script or print a diagnostic.
 # The caller reads the exit status instead and treats 127 (script missing) or
 # 126 (not executable) as a reason to STOP AND REPORT -- never as license to
 # silently skip the guard and proceed. The .claude/agents/*.md call sites

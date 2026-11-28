@@ -94,7 +94,7 @@ contexts, never through this gate prose) carries **exactly one** of the three bl
   *registerable* as one bucket, not as an invocation target. The lag risk the tag scheme exists
   to kill does not apply here: this bucket's membership is closed at two named views, and
   `tests/test_nox_bucket_gate.py` asserts both still carry the tag.
-- `everything-else` — `shellcheck`, `linkcheck`, `docstringcheck`, `docs`.
+- `everything-else` — `shellcheck`, `linkcheck`, `docstringcheck`, `decisions_entries`, `docs`.
 
 **Staged gate policy (who runs what):**
 

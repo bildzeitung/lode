@@ -73,9 +73,9 @@ app = typer.Typer(add_completion=False)
 _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
-#: Separators that break one Bash command LINE into independent segments --
-#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (an
-#: unquoted newline is handled before this, by :func:`_logical_lines`).
+#: Separators that break a Bash command into independent segments -- ``;``,
+#: ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)``.
+#: :func:`_split_segments` cuts at these and at a newline, outside quotes.
 #: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
 #: read piped into ``tee`` was excluded wholesale because the write check saw
 #: ``tee`` anywhere on the line, and a line merely pairing a docs path with
@@ -83,8 +83,8 @@ _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 #: ``docs/*.md`` anywhere on the line. Splitting first and classifying each
 #: piece independently collapses both failure modes into one rule.
 #:
-#: Splitting is done by :mod:`shlex`, not by a regex, because a separator
-#: only separates OUTSIDE quotes: a raw-character split cuts
+#: Splitting honours quoting (:func:`_mask_line`), not a regex, because a
+#: separator only separates OUTSIDE quotes: a raw-character split cuts
 #: ``grep -n "foo|bar" docs/design.md`` in half, leaving two fragments with
 #: unbalanced quotes that nothing downstream can tokenize, so a genuine read
 #: is dropped. That is worth a third of the direct rows on the calibration
@@ -94,10 +94,9 @@ _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 #: the segment they qualify.
 _SEGMENT_PUNCTUATION_CHARS = "();&|"
 
-#: To :func:`_logical_lines` a ``#`` opens a comment only at the start of a
-#: word: at the start of a line, or after whitespace or one of these
-#: separators. It does not take ``$#``, ``${x#y}`` or ``a#b`` for a comment;
-#: shlex in :func:`_split_line_segments` does, to the end of that line.
+#: A ``#`` opens a comment (:func:`_mask_line`) only at the start of a word:
+#: at the start of a line, or after whitespace or one of these separators. It
+#: does not take ``$#``, ``${x#y}`` or ``a#b`` for a comment.
 _COMMENT_PRECEDERS = " \t" + _SEGMENT_PUNCTUATION_CHARS
 
 #: Argument-forwarding wrappers a real command name can follow -- same
@@ -120,111 +119,118 @@ _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
 _HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*([\'\"]?)(\w+)\2")
 
 
-def _split_line_segments(line: str) -> list[str]:
-    """Split ONE line on the shell separators listed at
-    :data:`_SEGMENT_PUNCTUATION_CHARS`, honouring quoting.
+def _mask_line(line: str, quote: str) -> tuple[str, str]:
+    """``line`` with every character the shell would not treat as syntax
+    blanked, plus the quote still open at its end (``quote`` is the one open
+    at its start).
 
-    A line shlex cannot tokenize at all (an unbalanced quote) is returned
-    whole, which degrades that one line to the pre-``lode-wtk2`` line-level
-    behaviour rather than dropping it. A line here is what
-    :func:`_split_segments` hands over, so it holds a newline wherever a
-    quoted argument spans one.
+    Blanked: the inside of a quoted argument and a backslash-escaped
+    character (a backslash escapes outside single quotes only). Quote
+    delimiters are kept. The mask stops where a comment starts, so it is no
+    longer than the line and an index into it is an index into ``line``. A
+    ``#`` opens a comment only at the start of a word, so ``$#`` and ``a#b``
+    do not.
+
+    A command substitution is not followed: ``"$(...)"`` is quoted text. The
+    one thing kept from it is a ``<`` inside a double quote after a ``$(`` on
+    the same line, so the heredoc opener of ``"$(cat <<'EOF'`` stays visible
+    to :func:`_strip_heredoc_bodies`, the only reader of a ``<`` in the mask.
+    The test is that crude: a ``$(`` on an earlier line is not seen, and one
+    before the quote counts. ANSI-C quoting is read as a single quote, so the
+    ``\\'`` in ``$'it\\'s'`` closes it.
     """
-    lexer = shlex.shlex(line, posix=False, punctuation_chars=_SEGMENT_PUNCTUATION_CHARS)
-    lexer.whitespace_split = True
-    segments: list[str] = []
-    current: list[str] = []
-    try:
-        for token in lexer:
-            if token and all(char in _SEGMENT_PUNCTUATION_CHARS for char in token):
-                if current:
-                    segments.append(" ".join(current))
-                current = []
-            else:
-                current.append(token)
-    except ValueError:
-        return [line]
-    if current:
-        segments.append(" ".join(current))
-    return segments
-
-
-def _strip_heredoc_bodies(command: str) -> list[str]:
-    """The command's lines with every heredoc BODY removed -- the lines
-    between a ``<<WORD`` opener and its terminating ``WORD`` line, the
-    terminator included. The opener line itself is kept, so
-    :func:`_is_write_form` still sees the ``<<`` and disqualifies it.
-
-    Heredoc body text is data, not commands: ``cat >> docs/stack.md <<'EOF'``
-    followed by prose mentioning ``grep foo docs/design.md`` would otherwise be
-    split into segments and one body line classified as a genuine direct read
-    (lode-wtk2). Delimiters opened on one line are consumed in order, and a
-    ``<<-`` body may indent its terminator.
-    """
-    kept: list[str] = []
-    pending: list[tuple[bool, str]] = []
-    for line in command.splitlines():
-        if pending:
-            dash, word = pending[0]
-            if (line.strip() if dash else line.rstrip()) == word:
-                pending.pop(0)
-            continue
-        kept.append(line)
-        pending.extend(
-            (bool(m.group(1)), m.group(3)) for m in _HEREDOC_OPEN_RE.finditer(line)
-        )
-    return kept
-
-
-def _logical_lines(text: str) -> list[str]:
-    """``text`` split at every newline OUTSIDE quotes, so a newline inside a
-    multi-line quoted argument stays part of that argument and the closing
-    quote is not misread as an opening one (lode-k813a). A backslash-newline
-    continuation splits like any other unquoted newline. If a quote is still
-    open at the end, where it went wrong is unknown, so every newline splits.
-
-    Each piece is handed to shlex as its own line: shlex drops everything
-    from a ``#`` to the end of its line, so a comment or a mid-word ``#``
-    such as ``$#`` must not share a line with a later command. A comment's
-    own text is skipped here, as a shell skips it: an apostrophe in a comment
-    opens no quote.
-    """
-    lines: list[str] = []
-    start = 0
-    quote = ""
+    out = list(line)
     i = 0
-    while i < len(text):
-        char = text[i]
-        if char == "\\" and quote != "'" and text[i + 1 : i + 2] != "\n":
+    while i < len(line):
+        char = line[i]
+        if char == "\\" and quote != "'":
+            out[i : i + 2] = " " * len(out[i : i + 2])
             i += 2
             continue
         if quote:
             if char == quote:
                 quote = ""
+            elif not (char == "<" and quote == '"' and "$(" in line[:i]):
+                out[i] = " "
         elif char in "'\"":
             quote = char
-        elif char == "#" and (i == start or text[i - 1] in _COMMENT_PRECEDERS):
-            end = text.find("\n", i)
-            i = len(text) if end == -1 else end
-            continue
-        elif char == "\n":
-            lines.append(text[start:i])
-            start = i + 1
+        elif char == "#" and (i == 0 or line[i - 1] in _COMMENT_PRECEDERS):
+            del out[i:]
+            break
         i += 1
+    return "".join(out), quote
+
+
+def _strip_heredoc_bodies(command: str, carry_quotes: bool = True) -> tuple[str, str]:
+    """The command with every heredoc BODY removed -- the lines between a
+    ``<<WORD`` opener and its terminating ``WORD`` line, the terminator
+    included -- and every comment's text, paired with its mask. The opener
+    line itself is kept, so :func:`_is_write_form` still sees the ``<<`` and
+    disqualifies it.
+
+    The mask is each kept line's :func:`_mask_line` followed by the line's
+    break: a newline, or a blank when a quote carries across it. It is one
+    character longer than the text and always ends in a newline, which
+    :func:`_split_segments` needs to emit its last segment.
+
+    Heredoc body text is data, not commands: ``cat >> docs/stack.md <<'EOF'``
+    followed by prose mentioning ``grep foo docs/design.md`` would otherwise be
+    split into segments and one body line classified as a genuine direct read
+    (lode-wtk2). Delimiters opened on one line are consumed in order, and a
+    ``<<-`` body may indent its terminator. An opener inside a quoted
+    argument (``python3 -c 'print(1 << 3)'``) opens nothing, except the one
+    :func:`_mask_line` keeps: ``"$(cat <<'EOF'``, whose body is dropped like
+    any other. A body is not scanned for quotes, so its apostrophes open none.
+
+    If a quote is still open at the end, where it went wrong is unknown, so
+    the whole strip is redone with ``carry_quotes`` off: every physical line
+    starts unquoted, and an opener the stray quote hid is found.
+    """
+    kept: list[str] = []
+    masks: list[str] = []
+    pending: list[tuple[bool, str]] = []
+    quote = ""
+    for line in command.split("\n"):
+        if pending:
+            dash, word = pending[0]
+            if (line.strip() if dash else line.rstrip()) == word:
+                pending.pop(0)
+            continue
+        mask, quote = _mask_line(line, quote)
+        if not carry_quotes:
+            quote = ""
+        line = line[: len(mask)]
+        kept.append(line)
+        masks.append(mask + (" " if quote else "\n"))
+        pending.extend(
+            (bool(m.group(1)), m.group(3))
+            for m in _HEREDOC_OPEN_RE.finditer(line)
+            if mask[m.start()] == "<"
+        )
     if quote:
-        return text.split("\n")
-    lines.append(text[start:])
-    return lines
+        return _strip_heredoc_bodies(command, carry_quotes=False)
+    return "\n".join(kept), "".join(masks)
 
 
 def _split_segments(command: str) -> list[str]:
-    """Split a Bash command into independent segments -- heredoc bodies
-    stripped first, then on unquoted newlines, then on the in-line shell
-    separators -- dropping any segment with no non-whitespace content."""
+    """Split a Bash command into independent segments -- heredoc bodies and
+    comment text stripped first, then at every newline and in-line shell
+    separator (:data:`_SEGMENT_PUNCTUATION_CHARS`) OUTSIDE quotes, segments
+    with no non-whitespace content discarded.
+
+    One scan decides what is quoted, so the heredoc, newline and separator
+    splits cannot disagree about it (lode-d3snk).
+    """
+    text, mask = _strip_heredoc_bodies(command)
     segments: list[str] = []
-    for line in _logical_lines("\n".join(_strip_heredoc_bodies(command))):
-        segments.extend(_split_line_segments(line))
-    return [seg for seg in segments if seg.strip()]
+    start = 0
+    for i, char in enumerate(mask):
+        if char == "\n" or char in _SEGMENT_PUNCTUATION_CHARS:
+            piece = text[start:i].strip()
+            if piece:
+                segments.append(piece)
+            start = i + 1
+    return segments
 
 
 def _segment_tokens(segment: str) -> list[str]:

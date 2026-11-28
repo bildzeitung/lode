@@ -2575,6 +2575,13 @@ entries below from being rewritten to chase the current tree.)
      range-granularity question it forces. **Owned by `lode-o7pf`**, which makes this call before
      building anything. See
      [editing.md — Inline lint squiggles, deferred](editing.md#inline-lint-squiggles--deferred-not-built-see-lode-o7pf).
+
+     **Update (lode-o7pf.1, 2026-11-27):** both halves of item 1 are decided — hand-rolled rules, and
+     each rule returns explicit `[start, end)` character ranges on its line, which settles range
+     granularity. They are rendered by a `TextArea.get_line` override; the design is recorded, not
+     yet built. Four questions about how individual rules behave were raised at review and are open,
+     owned by `lode-kgg0h`. See
+     [editing.md — Inline lint squiggles](editing.md#inline-lint-squiggles--get_line-underlines-see-lode-o7pf).
   2. **Whether a custom `.scm` injection query ever ships** to reach inline colouring (emphasis,
      strong, inline code, inline links) — currently block-level only. **Unowned; leaning no** — it
      means hand-building an injection subsystem against Textual's private highlight path, the same
@@ -6359,6 +6366,14 @@ entries below from being rewritten to chase the current tree.)
   is in the `lode-k813a` marker under the entry "docs-index usage report: count each tool call
   once, and classify an index call by segment" (`lode-yt7q2`).
 
+  **Update (lode-d3snk, 2026-11-27):** this entry's `shlex` separator split is replaced. `shlex`
+  in non-POSIX mode has no backslash escapes and opens a quote only at the start of a token, so
+  it disagreed with the newline scan about an escaped or mid-word quote. One scan
+  (`_mask_line`) now decides what is quoted, and the heredoc, newline and separator splits all
+  read that mask. What it changed on real transcripts is in the `lode-d3snk` marker under the
+  entry "docs-index usage report: count each tool call once, and classify an index call by
+  segment" (`lode-yt7q2`).
+
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
   [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
@@ -8030,6 +8045,41 @@ one is taken, B: the retire condition rests on it.
       turn as one position, the `NOTE` lines and the `git show` pipe bring it to 51 of 126.
       The built hand read (24 calls, drawn under the first id rule, snippet answers not
       classified) is replaced by the one above.
+  - **Update (lode-fg7w7.3, 2026-11-27):** proposal C's "Not checked: whether it covers what the
+    re-assertions check" is now checked, read from the scripts: partly. See the entry "Fold the
+    deterministic guard-script ritual into fewer tool calls" (`lode-fg7w7.3`) below.
+  - **Update (lode-fg7w7, maintainer ruling 2026-11-27, from a `/challenge` of the epic):** the
+    retire condition above is made exact, and it changes. All of it is recorded on `lode-fg7w7`
+    and `lode-fg7w7.2`.
+    - **One window, not two.** B is measured once, on the existing transcripts. The falsifier's
+      "not stable across two windows" no longer applies, so the outcome rests on one 13-day,
+      one-machine run.
+    - **A hard 50% line.** Below 50% of id-less queries followed means retire; 50% or more
+      means keep. There is no grey zone. B records the number as an Update marker here and files
+      a `human` ticket to confirm it and, if it triggers, to carry out the retire.
+    - **The snippet case.** A hand-read sample of at least 40 id-less index calls (raised from
+      20; at 20 the margin is about ±11 points) is classified by hand. A call answered from the
+      snippet alone counts as a follow, and the 50% line applies to that corrected rate. This
+      replaces "an answer taken from the snippet counts as no follow" in proposal B.
+    - **What a follow is.** The read must overlap a cited range. It can be an explicit range read
+      (`sed -n a,b`, the `Read` tool with offset and limit, an `awk` `NR` range, `head` or
+      `tail`), or a whole-file read (`Read` with no range, or `cat`) of a cited file. A `grep`
+      alone does not count. Paths match as `docs/<file>`, whichever checkout or git ref they
+      come from. The read must come within the next 5 tool-call positions, and calls made in
+      parallel in one turn count as one position. A read credits every index call whose window
+      it falls in and whose own cited range it overlaps; a re-query gets no special case. The
+      cited ranges are every printed `path:lo-hi` plus the Update-marker lines a `NOTE` names.
+      The denominator is id-less calls with at least one hit. Zero-hit calls and calls with no
+      saved output are left out, and their counts are reported.
+    - **A probe before the ruling.** 192 id-less calls; any read of a `docs/` range before a
+      re-query counted, with no overlap check. The upper bounds were 30% at N=1, 41% at N=3, 45%
+      at N=5, 52% at N=10 and 55% at N=20. At N=5 the raw rate is therefore likely below 50%, and
+      the snippet correction will probably decide the verdict. The maintainer saw these numbers
+      and was warned not to tune the parameters to the verdict. They were chosen for what they
+      mean.
+    - **Proposal A.** Its optional "print the `sed -n` line" is dropped: it would raise the follow
+      rate by design. The zero-hit message checks a local `git grep` of `trunk` as well as `bd`,
+      since a stale worktree base is the likely cause of the zero-hit lookups above.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 
@@ -8084,3 +8134,159 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   still missed, as is any command whose quoted text holds an escaped quote or whose quote opens
   mid-word: the newline scan follows the shell there and the `shlex` separator split does not
   (`lode-d3snk`).
+  **Update (lode-htkr3, 2026-11-27):** the `lode-d3snk` Update marker that answers the last
+  sentence above was appended by mistake under the next section, "Fold the deterministic
+  guard-script ritual into fewer tool calls", at its end. It belongs to this entry; read it there.
+
+## Fold the deterministic guard-script ritual into fewer tool calls (open, lode-fg7w7.3)
+
+Proposal C of the `lode-a55l6` entry, raised as a debate under epic `lode-fg7w7`. Nothing is built
+under it and no guard script is changed. A human approves a consolidation before any build ticket is
+filed. Call counts are the `lode-a55l6` entry's (13-day window of local transcripts, one machine);
+the saving figures below are upper bounds worked out from those counts, not measurements.
+
+**What each script guarantees, and its call count**
+
+| Script | Calls | Guarantee |
+|---|---|---|
+| `isolation-guard.sh` (`lode-ska2`) | 1,159 (612 are a transcript's first, about 550 are `lode-6wgc` re-assertions) | cwd's toplevel is under `.claude/worktrees/`; otherwise stop. Never repairs. |
+| `recycled-worktree-guard.sh` (`lode-nt98`, `lode-ivth`) | 629 | cwd is inside a worktree (its own `case` repeats the isolation predicate) and HEAD is an ancestor of `origin/trunk`; otherwise it keeps the old HEAD as a `rescue/recycled-<sha>` branch and resets onto `origin/trunk`. Either way it then runs `git clean -fd` (`lode-3v1p`). |
+| `checkout-land-branch.sh` (`lode-qh1m`) | 199 | fetch `land/<id>` and `trunk`, check the tip out under a name derived from this worktree's directory. Exit 1 when not in a worktree. |
+| `handoff-sha.sh` (`lode-qh1m`, `lode-0a4n`) | 298 | derive HEAD, check origin's `land/<id>` is at it, write the metadata and labels in one process. |
+| `bd-dolt-push.sh` (`lode-83d`) | 319 | runs `bd-dolt-push-guard.sh` first and exits 1 if it refuses (`lode-fzau`); then `bd dolt push` with backoff and `bd dolt pull` between attempts. |
+
+The last four are 1,445 calls (4.4% of all tool calls); with the re-assertions, the ritual is about
+2,000 calls.
+
+**Does `trunk-write-guard.sh` already cover the isolation-guard re-assertions? Partly.** Read from the
+scripts, not run against a real vanished worktree.
+
+The re-assertions are two checkpoints per cycle. The first-write checkpoint runs before the first
+`Edit`/`Write` (builder step 5, reviewer step 4). The commit-and-`nox` checkpoint runs before the
+builder's first commit (step 6, which also covers the gate loop after it) and before the reviewer's
+`nox` gate run (step 5).
+
+- Covered: the first-write checkpoint, for the `lode-6wgc` failure (a launch worktree vanishes
+  mid-session and cwd drops onto the main checkout on `trunk`). `trunk-write-guard.sh`
+  (`PreToolUse(Edit|Write)`) asks on every `Edit`/`Write` while the checkout's branch is `trunk`.
+  It costs no tool call and also fires on writes after the first, which a checkpoint run once does
+  not.
+- Covered outside a live `/land` lock only: the commit-and-`nox` checkpoint. `trunk-bash-guard.sh`
+  (`lode-21sxk`, `PreToolUse(Bash)`, for commit, merge, push, rebase, cherry-pick and `nox`) asks on
+  `trunk`, but is silent there for every agent while `scripts/land-lock.sh held` reports a live
+  lock. That is `lode-21sxk`'s accepted limit, and it was ruled with the checkpoints kept. A pass
+  that dies without releasing leaves the lock live for up to `LAND_LOCK_STALE_SECONDS` (default
+  1800) after its last heartbeat. Builders run while `/land` runs, so in that window the checkpoint
+  is the only stop between a builder whose worktree vanished and a commit on `trunk`.
+- Not covered, the non-`trunk` gap: the hooks gate on the branch, `isolation-guard.sh` on the
+  location. A cwd in the main checkout on any branch other than `trunk` (a human left it on a
+  feature branch, or HEAD is detached by anything but a stopped rebase of `trunk`, which
+  `lode-3cxzs` made ask) passes both hooks and fails the guard.
+- Not covered, Bash file writes: file writes through Bash (python, sed, heredoc) are outside
+  `trunk-bash-guard.sh` by ruling, and `lode-gro8`'s accepted residual rests on the checkpoints
+  for them ("a write made through `Bash` has the checkpoints only").
+- Caveat on all of the above: the hooks decide "ask", never "deny", so they stop a dispatched
+  subagent only because it cannot approve; that is the `lode-p8zl` ruling, not something checked
+  here.
+- Not a re-assertion, and not replaced: the mandatory first call. The hooks gate only `Edit`/`Write`
+  and those six Bash commands, on `trunk`; the first call stops a `lode-ska2` no-worktree dispatch
+  before any of the work the hooks do not see, so it stays. Not examined: running the start guards
+  from a `SubagentStart` hook, which would cost no tool call. The hooks page
+  (https://code.claude.com/docs/en/hooks, read at review) says that hook cannot block and that its
+  `additionalContext` goes in at the start of the subagent's conversation, so the stop would still
+  rest on the agent reading it. Not checked: whether its cwd is the subagent's worktree; if it is
+  the dispatcher's, `recycled-worktree-guard.sh` would reset and clean the wrong tree.
+
+**Proposed consolidation (each can be taken alone; 2 and 4 overlap; the human picks)**
+
+1. **Drop the two mid-session `isolation-guard.sh` re-assertions** (at most about 550 calls) and rely
+   on the two trunk hooks. The two checkpoints can be dropped separately; ruling (b) touches only
+   the commit-and-`nox` one. Three rulings come first. (a) The non-`trunk` gap: accept it, or widen
+   both hooks to ask whenever the toplevel is not under `.claude/worktrees/` (the main session
+   already gets an ask on trunk, so the added cost is asks on a non-trunk main-checkout branch);
+   widening reverses `lode-p8zl` ruling 1 (gate on the branch). (b) The live-lock window:
+   `lode-21sxk`'s limit was accepted with this checkpoint in place. (c) Bash file writes: the
+   checkpoints are the only stop `lode-gro8`'s residual names. (b) and (c) each need an Update
+   marker on their entry, and `docs/agents-workflow.md`'s `lode-6wgc` and `lode-gro8` passages
+   change in step.
+2. **One start-of-cycle call for the two start guards** (at most about 612 calls, one per dispatch
+   that runs both): a wrapper that runs `isolation-guard.sh`, then `recycled-worktree-guard.sh`, and
+   stops on the first nonzero exit. Both scripts and their tests stay, so `lode-ska2`'s request that
+   they remain distinct siblings holds; only the call count changes. Not checked: whether every one
+   of the 629 `recycled-worktree-guard.sh` calls directly follows an isolation call.
+3. **`handoff-sha.sh` gets a `--push` option that ends by running `bd-dolt-push.sh`** (at most about
+   298 calls). Needs its exit-code table extended with a push failure distinct from the write
+   failures 1 to 5, since a failed push after a successful write must not look like a write that
+   did not happen; the push script's own exit 1 (its guard refused) cannot pass through as it is.
+   At least 21 `bd-dolt-push.sh` calls (319 less 298) have no `handoff-sha.sh` call to pair with.
+   Not checked: whether each of the 298 is directly followed by a push. `/land`, `/sweep` and
+   `/epic-audit` call the push script too, and the builder's escalation path writes the
+   `land-escalated` label between its `handoff-sha.sh` call and its push, so `--push` must not be
+   used there: the label would go unpublished.
+4. **`checkout-land-branch.sh` runs `recycled-worktree-guard.sh` itself first** (at most about 199
+   calls). Its callers are the reviewer, the rebase pickup and the comment groomer. In the first
+   two the guard already must precede the fetch. The groomer runs no recycled guard today, so its
+   share of the 199 saves nothing and its path would gain the guard's reset and `git clean -fd`.
+   A second run of the script in one worktree would also reset and clean a tree that by then holds
+   the cycle's work (HEAD is on `land/<id>`, not an ancestor of `origin/trunk`), so the build needs
+   a rule for that.
+
+Not proposed, the form of 2 and 3 that changes no script: chain the two scripts with `&&` in one
+Bash call. `lode-fvg0` made every block in the agent files one plain command, because the harness's
+worktree-isolation classifier refuses some compound shapes; `docs/agents-workflow.md` records which
+as "observations, not a contract". At review `scripts/isolation-guard.sh && echo ok` was accepted from a
+worktree-isolated agent on Claude Code 2.1.332; the real pairs were not tried. The exit status would
+no longer say which script failed, only each script's own diagnostic would. Taking this reverses
+`lode-fvg0`'s plain-call rule for those blocks and rests them on classifier behaviour.
+
+Proposals 2 and 4 save the same call on a checkout cycle: isolation guard, recycled guard and
+checkout are three calls, either proposal makes them two, and both together still make them two. So
+2 and 4 together save at most about 612 calls, not 811, and a build of both must say which of them
+runs the recycled guard on that path. All four together save at most about 1,460 calls (550 + 612 +
+298; proposal 4 adds nothing beyond 2), 4.5% of all tool calls.
+
+Risks to weigh: a wrapper puts two guarantees behind one exit code, so the diagnostic must say which
+guard refused; and a guard folded into another script is no longer its own line in the prose, so the
+instruction files' "run X, read its status" text must be reworded in step. Proposal 2 is the
+largest. Proposal 1 is the only one that removes a check, and proposal 4 the only one that adds a
+destructive step to a path that does not run it today.
+
+**Open (`lode-fg7w7.3`).** Which of proposals 1 to 4, if any, are built? For proposal 1: accept the
+non-`trunk` gap, or widen the hooks, and what stops a commit in the live-lock window and a Bash file
+write once the checkpoints are gone? The `human`-labelled ticket `lode-htkr3` asks for this approval.
+  **Update (lode-d3snk, 2026-11-27):** the escaped-quote and mid-word-quote misses above are fixed.
+  The `shlex` separator split is gone; one scan decides what is quoted, and it also keeps a
+  `<<` inside a quoted argument from opening a heredoc. One `<<` inside a quote still opens
+  one: in a double quote after a `$(` on the same line, as in `git commit -m "$(cat <<'EOF'`,
+  whose body is dropped as before. Measured by running the script from before and after the fix
+  over the same transcripts (2026-11-14 to 2026-11-27, default scope) and comparing Bash calls
+  by `tool_use` id: 13 calls change class, and each command was read in full. 1 index run is
+  now counted (the third lost run). 9 direct rows are now counted: 8 are a `grep`, `sed`, `awk`
+  or `tail` of a docs file in a command that held an escaped or nested quote, and 1 is a
+  `grep -v` whose pattern names a docs path, which the classifier does not tell from a path it
+  reads. 3 direct rows are gone: 2 are `bd create --description="..."` text whose quote opened
+  mid-word, and 1 is a `python -c "..."` probe from this ticket's own review that held `grep`
+  commands as strings. The report printed 299 / 3,124 before and 300 / 3,130 after. Not fixed:
+  ANSI-C quoting is read as a single quote, so the `\'` in `$'it\'s'` closes it and a command
+  after it on the same line is missed. A scan that reads it changed no call on these
+  transcripts.
+  **Update (lode-htkr3, 2026-11-27):** the Update marker directly above (`lode-d3snk`) does not
+  belong to this section. It corrects the "Still missed" bullet of the `lode-yt7q2` entry just
+  before this one, where a pointer to it has been added.
+  **Update (lode-htkr3, 2026-11-27) -- DECIDED (maintainer):** proposals 2 and 3 are approved;
+  proposals 1 and 4 are rejected.
+  - Proposal 1 rejected: both mid-session `isolation-guard.sh` re-assertions stay. The hooks are
+    not widened, so `lode-p8zl` ruling 1 (gate on the branch) stands, and the `lode-21sxk` live-lock
+    limit and the `lode-gro8` Bash-write residual keep the checkpoints they were accepted with. The
+    non-`trunk` gap therefore stays closed by the checkpoints, not by a hook. Saving around 550
+    calls was not worth reopening those three rulings.
+  - Proposal 2 approved, built as `lode-fg7w7.4`: one plain call to a wrapper that runs the two
+    start guards in order and stops on the first refusal, naming the guard that refused. Both
+    scripts and their tests stay separate siblings; `lode-fvg0`'s plain-call rule stands (no `&&`).
+  - Proposal 3 approved, built as `lode-fg7w7.5`: `handoff-sha.sh --push`, with an exit code for
+    "written, push failed" distinct from write failures 1 to 5, and not used on the builder's
+    escalation path, which writes the `land-escalated` label between the handoff and the push.
+  - Proposal 4 rejected: it saves no call beyond proposal 2, and it would add the recycled guard's
+    reset and `git clean -fd` to the comment groomer's path.
+  Upper-bound saving of what was approved: about 910 calls (612 + 298) over the measured window.
+  No check is removed.

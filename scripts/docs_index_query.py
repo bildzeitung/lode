@@ -31,7 +31,11 @@ flags those rows as fallback hits (``lode-qcp0``).
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
+import shlex
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -106,6 +110,7 @@ def _load_build() -> ModuleType:
 
 
 _build = _load_build()
+_entries = _load_sibling("_docs_index_query_entries_impl", "check_decisions_entries.py")
 
 
 def _load_log() -> ModuleType:
@@ -255,6 +260,108 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     return markers(entry[0], section[1] if section else entry[1])
 
 
+#: A query that is exactly one of this repo's bd issue ids (``lode-k813a``,
+#: ``lode-fg7w7.1``). The prefix is the ``issue-prefix`` pinned in
+#: ``.beads/config.yaml``, so an ordinary hyphenated word is never looked up.
+_BD_ID = re.compile(r"lode-[a-z0-9]+(?:\.[0-9]+)*")
+
+#: Hard cap on each subprocess of the zero-hit id check. ``bd show`` takes
+#: over a second, and far longer while another process holds the Dolt lock.
+_ID_CHECK_TIMEOUT_S = 5
+
+#: The ref a new worktree is branched from, so the one a stale checkout lags.
+_TRUNK_REF = "origin/trunk"
+
+
+def superseded_head(path: str, loaded: dict[Path, dict]) -> str | None:
+    """The path of the chain head when ``path`` is a superseded decision entry
+    file, else ``None`` (``lode-ebayj.2``).
+
+    ``loaded`` holds each entry directory already read, so that a run of hits
+    in one directory reads its files once.
+    """
+    entry_path = Path(path)
+    if not _build._chunker.is_entry_file(entry_path):
+        return None
+    if entry_path.parent not in loaded:
+        loaded[entry_path.parent] = _entries.load_entries(entry_path.parent)[0]
+    entries = loaded[entry_path.parent]
+    entry_id = entry_path.name.split("-", 1)[0]
+    if entry_id not in entries:
+        return None
+    head = _entries.chain_head(entries, entry_id)
+    return None if head == entry_id else str(entries[head]["path"])
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """Run ``args`` in the repo with a hard timeout; ``None`` when the tool is
+    missing, hangs, or cannot start, so every caller falls back quietly."""
+    try:
+        return subprocess.run(
+            args,
+            cwd=_build.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=_ID_CHECK_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # fmt: skip
+        return None
+
+
+def zero_hit_id_note(raw_query: str) -> str | None:
+    """For a zero-hit query that is a bare bd id, a line saying why, else ``None``.
+
+    Tells the caller to stop searching docs/: either the id has an entry on
+    ``origin/trunk`` that this checkout predates (a worktree's base lags), or
+    it exists in bd with no docs entry, or it is not in the local bd database.
+    Never depends on git or bd being reachable: a failure or timeout of either
+    probe yields ``None`` and the caller prints the plain ``No results.``
+    """
+    bd_id = raw_query.strip()
+    if not _BD_ID.fullmatch(bd_id):
+        return None
+    # ``-w`` and the chunker's own globs hold this probe to what the index
+    # matches: a whole id, in the files it chunks.
+    pathspecs = [f":(glob)docs/{glob}" for glob in _build._chunker.CORPUS_GLOBS]
+    grep = _run(
+        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", *pathspecs]
+    )
+    # Exit 1 is "no match"; any other failure (128: no such ref) says nothing
+    # about trunk's docs, so the bd answer below would claim too much.
+    if grep is None or grep.returncode not in (0, 1):
+        return None
+    if grep.returncode == 0:
+        files = ", ".join(
+            line.removeprefix(f"{_TRUNK_REF}:") for line in grep.stdout.splitlines()
+        )
+        return (
+            f"{bd_id} has a docs entry on {_TRUNK_REF} ({files}) that this "
+            f"checkout predates; find its lines with "
+            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- {shlex.join(pathspecs)}`."
+        )
+    # ``--readonly``: a lookup must never write bd state, and a bd killed at
+    # the timeout must not be mid-write.
+    shown = _run(["bd", "--readonly", "show", bd_id, "--json"])
+    if shown is None:
+        return None
+    missing = f"{bd_id} does not exist in the local bd database"
+    if shown.returncode != 0:
+        if "no issues found" in shown.stdout + shown.stderr:
+            return f"{missing}."
+        return None
+    # bd resolves a unique partial id, so exit 0 alone does not prove this id.
+    try:
+        found = [issue["id"] for issue in json.loads(shown.stdout)]
+    except (ValueError, TypeError, KeyError):  # fmt: skip
+        return None
+    if bd_id in found:
+        return f"{bd_id} exists in bd but no docs/ entry mentions it; see `bd show {bd_id}`."
+    if found:
+        return f"{missing}; bd resolves it to {', '.join(found)}."
+    return None
+
+
 def query(
     raw_query: str,
     doc_class: str | None = None,
@@ -348,11 +455,15 @@ def main(
     elapsed_ms = (time.perf_counter() - start) * 1000
     fallback_fired = False
     if results:
+        entry_dirs: dict[Path, dict] = {}
         for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
             fallback_fired = fallback_fired or used_fallback
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
+            head = superseded_head(path, entry_dirs)
+            if head:
+                print(f"    NOTE: superseded; read the chain head instead: {head}")
             markers = split_entry_markers(path, line_lo, line_hi)
             if markers:
                 where = ", ".join(str(n) for n in markers)
@@ -362,6 +473,11 @@ def main(
                 )
     else:
         print("No results.")
+        # Under a --class filter a zero hit says nothing about the other
+        # class, so "no docs/ entry mentions it" would be a false claim.
+        note = zero_hit_id_note(text) if doc_class is None else None
+        if note:
+            print(note)
 
     # Logged AFTER the results are printed, and failing open: instrumentation
     # must never break or delay the thing it measures. An unwritable cache dir

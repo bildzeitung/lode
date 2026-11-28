@@ -86,9 +86,16 @@ def test_real_corpus_covers_every_docs_file():
     # epic adds some), and a `len(...) == 15` pin would fail on the next one
     # while proving nothing the set comparison does not already prove.
     seen = {Path(u.path).name for u in _corpus_units()}
-    on_disk = {p.name for p in DOCS_DIR.glob("*.md")}
+    on_disk = {p.name for p in DOCS_DIR.glob("*.md")} | {
+        p.name for p in (DOCS_DIR / "decisions").glob("*.md")
+    }
     assert seen == on_disk
     assert on_disk, "expected docs/ to contain markdown files"
+
+
+def test_a_decision_entry_file_is_one_unit_despite_its_headings():
+    text = "---\nid: aaaaa\n---\n# One\n\ntext\n\n## Two\n\nmore\n"
+    assert len(chunk_file("fixture/decisions/aaaaa-x.md", text)) == 1
 
 
 def test_a_future_large_section_still_fails_the_invariant_if_unchunked():

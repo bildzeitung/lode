@@ -246,8 +246,8 @@ Each builder then runs its orderly cycle. The worktree is **handed to it by the 
 (`.claude/settings.json`'s `worktree.baseRef: "fresh"`, `lode-jzbz`; `origin/trunk` can lag local
 `trunk` by however long since `/land`'s last push — usually small, since `/land` pushes `trunk`
 immediately after every merge, but never measured). It works
-in-cwd with plain git, and its very first executable action is `scripts/isolation-guard.sh`
-(lode-ska2) — a tested assertion that it is inside `.claude/worktrees/` at all, since the harness has
+in-cwd with plain git, and its very first executable action is `scripts/start-guards.sh`
+(lode-fg7w7.4), which runs `scripts/isolation-guard.sh` (lode-ska2) first — a tested assertion that it is inside `.claude/worktrees/` at all, since the harness has
 been observed handing a dispatched agent no worktree whatsoever; on failure it **hard-stops and
 reports** rather than writing on `trunk`, and never self-provisions one ([full account
 below](#isolation-guard-lode-ska2--lode-jk44)). The worktree is already **locked by the harness**,
@@ -469,10 +469,15 @@ Two rules, three message texts:
     weaker than the same-variable guarantee
     [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added.
     A script that derives, validates and writes inside one process *is* a plain call, so the agent
-    files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [bd-update-args…]`
+    files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [--push] [bd-update-args…]`
     (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
     broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
-    `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
+    `ls-remote` itself failed, 6 `--push` only: the field WAS written but `scripts/bd-dolt-push.sh`
+    failed or its guard refused (lode-fg7w7.5), so re-run `bd-dolt-push.sh`, never the hand-off.
+    `--push` runs that script after a successful write, saving the separate publish call at the
+    three sites where nothing is written between the two; the builder's escalation path keeps the
+    separate push because it adds `land-escalated` between them; the script's header has the rest),
+    `scripts/check-review-head.sh <id>` (the code-reviewer's read +
     validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable =
     drift, 4 `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
@@ -694,9 +699,10 @@ understood:
 - **It only runs in an isolated launch worktree — mechanically, at all four call sites.**
   `.claude/skills/code/rebase-pickup.md` step 2, `code-reviewer.md`'s step 2, `land-review.md`'s first action,
   and `coding.md`'s fresh-build site (step 3) each invoke the same
-  `scripts/recycled-worktree-guard.sh`, which wraps its remediation in an explicit
+  `scripts/recycled-worktree-guard.sh` (through `scripts/start-guards.sh`, lode-fg7w7.4,
+  [below](#precondition-guards-the-012-family-lode-t6ni)), which wraps its remediation in an explicit
   `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`, in the same
-  block as the destructive command. Every call site also runs [`scripts/isolation-guard.sh`
+  block as the destructive command. The wrapper runs [`scripts/isolation-guard.sh`
   (lode-ska2)](#isolation-guard-lode-ska2--lode-jk44) immediately before it — a second, script-backed
   assertion of the same predicate, which replaced the prose `pwd` check the agents used to
   carry. Either script's
@@ -1132,6 +1138,28 @@ so a broken precondition is caught before it can do anything else.
   machine-vs-content distinction lode-9i2p draws for content gates, applied here to preconditions
   instead. Like exit 1, the caller STOPs AND REPORTs; unlike exit 1, nothing here is a claim about
   where the agent is or what state its worktree is in.
+
+**The start-of-cycle wrapper (lode-fg7w7.4, lode-htkr3 proposal 2).** The builder (fresh build and
+rebase pickup), reviewer and `land-review` each ran `isolation-guard.sh` and then
+`recycled-worktree-guard.sh` back to back as two tool calls.
+[`scripts/start-guards.sh`](../scripts/start-guards.sh) `<context-message>` is the one call that
+replaces the pair: it runs the isolation guard, then the recycled-worktree guard with the context
+message, and stops at the first nonzero exit. The two guards stay distinct siblings with their own
+tests (lode-ska2); the wrapper re-implements neither and weakens neither. Its exit status tells the two
+guards apart even though both use 1 and 2: **3** = the isolation guard exited nonzero and the
+recycled guard never ran, **4** = isolation passed and the recycled guard exited nonzero, **2** = usage
+error. It does not carry the guard's own 1-vs-2: a refusal and a guard that could not run map to the
+same 3 or 4, so the wrapper's one-line `<guard> exited N` message names that status, below the guard's
+own diagnostic ([`tests/test_start_guards.py`](../tests/test_start_guards.py)). The wrapper is a
+sequencer, not a fourth precondition guard, so it is not in the roster above. The mid-session
+`isolation-guard.sh` re-assertions (lode-6wgc) remain direct calls, and the `comment-auditor` and `comment-groomer` agents,
+which run only the isolation guard, still call it directly. The caller's response is unchanged:
+any nonzero exit is the same STOP AND REPORT.
+
+The wrapper is read from the launch worktree like the guards it runs, so it has the same bootstrap
+gap: a worktree recycled from a branch cut before lode-fg7w7.4 landed has both guards on disk but no
+`start-guards.sh`, and the call exits 127. That is a stop and a report, where the two direct calls
+would have repaired the worktree and carried on.
 
 **The STOP-AND-REPORT rule is uniform: no caller distinguishes exit 1 from exit 2.** The rule, not a
 list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1` where a
@@ -1832,7 +1860,8 @@ Residual gaps that remain — honest about what the inversion does **not** close
 - **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
   own prose about the rule (`grep "gh issue create" docs/`, a commit message quoting the verb) — a
-  worse trade than the residual.
+  worse trade than the residual. The residual covers a `gh` call on a later line of the quoted
+  string too (`lode-2ctid`, below).
 - **`gh` reached from a command position the matcher does not recognize.** The *inversion* is
   default-deny on the **subcommand** — but the decision to look at a line at all still rests on
   matching `gh` at a command position, and that matcher is an enumeration: a leading `VAR=x`, a path
@@ -1962,6 +1991,68 @@ changed. `lode-obox`'s original framing was right that a regex *narrowing* here 
 must be separately argued with evidence it cannot open an under-deny hole — the fix above stayed
 inside that constraint by construction: it changes when a fragment starts, never what counts as a
 match once a fragment exists.
+
+**A newline inside a quoted argument does not start a segment (`lode-2ctid`).** `_split_unquoted`
+copied a literal newline inside `'…'` or `"…"` through unchanged, and both guards read its output
+line by line. So the second line of a multi-line commit message or `bd --notes` body was judged as
+a command of its own: `git commit -m "guard: x⏎⏎gh issue create is denied"` was denied, though
+nothing in it runs `gh`. The splitter now emits an in-quote newline as a space, which keeps the
+whole quoted argument in the segment of the command it belongs to. A newline outside quotes still
+separates segments.
+
+Unlike the `lode-obox` fix, **this one is a narrowing**: it removes segment starts the guard used
+to check. It is safe only where the scanner's quote state is right, because a wrong "inside a
+quote" at a line break hides a whole live line. The scanner is flat: it tracks `'`, `"` and
+backslash and nothing else. Each of the following has a live `gh` write on its own line between two
+quote characters the shell does not read as a pair, and each was verified in real `bash` with a
+stand-in command name:
+
+- **A heredoc body**, which is free text. In
+  `cat > f <<EOF⏎don't⏎EOF⏎gh pr create …⏎cat >> f <<EOF⏎can't⏎EOF` the write is a top-level
+  command between two apostrophes.
+- **A comment.** An apostrophe in it opens no quote.
+- **ANSI-C quoting.** In `$'a\'b'` the escaped apostrophe does not close the string.
+- **A substitution inside double quotes** (`$(…)` or backticks). It is a nested parse context with
+  its own quotes, and a newline inside it separates commands.
+- **Backticks.** Inside them the shell halves a doubled backslash before it parses, so in
+  `` `echo \\'a` `` the apostrophe is escaped, where the scanner sees an opening quote.
+
+That list is not closed, so the join is an **allowlist, not a list of those constructs** — the same
+inversion `lode-9mbt` made for the verb list. The join stands only if every byte outside quotes is
+a quote character, a backslash escape, one of `;` `&` `|`, or a member of a short inert set
+(letters, digits, whitespace and `_ . / = : , @ % + ~ ^ > -`; in the script, the `plain` pattern
+plus newline), no unescaped `$` or backtick sits
+inside double quotes, and the scan ends outside a quote. Anything else **abandons the join for the
+whole command**: every in-quote newline is kept as a segment start, exactly as before
+`lode-2ctid`. `<<` abandons it too, quoted or not. A byte missing from the inert set only brings
+back the old false deny, which a reword or `git commit -F <file>` gets around; add one only with an
+argument that it cannot change how the shell reads a later quote character, and, since `lode-4n0kf`
+appends a `plain` byte before any other test, only if no branch of the scanner handles that byte in
+any quote state (both conditions are stated at the pattern's declaration). The first form of this
+fix listed constructs instead, and its review found the backtick case above still open, which is
+why the rule is stated as an allowlist.
+
+Each construct above is pinned in the `DENIED` table of `tests/test_gh_write_guard.py` and, with a
+neutral marker, in `tests/test_shell_quote_split_lib.py`. A differential fuzz against real `bash`
+checked the rule, using a stand-in command name, never `gh`. Each generated script numbered its
+stand-in calls, and every call `bash` ran had to start a line of the splitter's output. Over
+4,000 scripts built from the constructs above and others, `trunk`'s splitter hid a call that ran
+in 118 (the residuals already listed in this section) and this one hid a call in the same 118 and
+no others. Over 3,000 scripts built only from allowlisted shapes, the join stood in 1,658 and no
+call that ran was hidden.
+
+**What the join does widen is the quoted-indirection residual above.**
+`sh -c "true⏎gh issue create …"` used to be denied, because the in-quote newline started a
+segment. It now falls through, as `sh -c "true; gh issue create …"` always has. A guard that reads
+only the command string cannot tell that command from `git commit -m "true⏎gh issue create …"`,
+which this fix exists to let through, so the newline form joins the accepted residual. It is pinned
+next to the `;` form in
+`test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_residual`.
+
+Two false denies of this class remain, both in the conservative direction: a command with anything
+outside the allowlist (a `$` or backtick in a double-quoted message, a comment line, a `$(…)` or a
+glob anywhere in the same command), and a backslash-newline inside double quotes, which is still
+copied through as a newline.
 
 **If you hit this class again** — an otherwise-legitimate Bash call denied because a `gh` command
 name merely appears, quoted, inside unrelated prose or a search pattern — the correct response is
@@ -2194,6 +2285,16 @@ silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquo
 UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
 changes a single decision; both are pinned by tests.
 
+**A shared change that does change this guard's decisions (`lode-2ctid`).** The split now joins a
+newline inside a quoted argument (rule, and the constructs that abandon the join:
+[the `gh` guard's section](#false-positive-class-a-gh-command-name-merely-quoted-inside-unrelated-text-lode-obox)).
+For this guard that moves two things. A multi-line quoted argument of a `bd`/`git` command is
+scanned on every line, where before only its first line was, plus any later line that happened to
+begin with `bd` or `git`: `git commit -m "fix⏎⏎see <40-hex>"` is now denied when the value is not
+an object, the same accepted free-text over-match a one-line message already had. And a later line
+of *another* command's quoted argument that begins with `git` or `bd` is no longer taken for an
+invocation. Both are pinned in `tests/test_sha_fabrication_guard.py`.
+
 ### The residual `_split_unquoted` cost: a shared scan-length cap, fail-closed (lode-rjqm)
 
 `local LC_ALL=C` (above) fixed `_split_unquoted`'s *indexing* — the loop is O(*n*) iterations
@@ -2206,6 +2307,21 @@ above the ~14 ms the old quoting-*unaware* `tr` split cost, and this loop sits o
 guard's cheap pre-filter can screen out is the *common* one: a real `git commit -m …` or `bd
 update … --notes …` that legitimately contains the guard's own trigger word plus a long body —
 exactly what `/land` writes constantly.
+
+**Update (lode-4n0kf):** `_split_unquoted` now tests each byte first against one plain set — the
+inert set of the [`lode-2ctid` join rule](#false-positive-class-a-gh-command-name-merely-quoted-inside-unrelated-text-lode-obox)
+minus newline — and appends a match before the quote-state chain, so an ordinary byte costs one
+test instead of about ten. Output is byte-identical to the function it replaced: a differential
+fuzz of 8,004 strings at build, and at review 20,025 distinct strings (every byte value in twelve
+quote contexts, every pair from a list of special bytes, and random mixes) under a C caller
+locale, most of them again under a UTF-8 one, with no mismatch. Re-measured at review (min of 9, user+sys CPU, 16 KiB inputs):
+ordinary text (base64, a quoted commit message, multi-line notes) 390–405 ms → 260–285 ms, i.e.
+~24 μs/byte → ~17 μs/byte; input made only of bytes outside the plain set (`#*`, `()`, non-ASCII)
+375–405 ms → 390–415 ms, because such a byte now pays the one extra test ahead of the unchanged
+chain. So the "no further per-character algorithmic win" sentence above no longer holds for
+ordinary bytes, and the ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in this section are
+earlier measurements that now describe only input outside the plain set, give or take the few
+percent that extra test adds. The cap and the reasoning for it are unchanged.
 
 **Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
 (b) replace the char loop with a regex-driven scan that locates candidate operator characters
@@ -2688,9 +2804,9 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | the harness locks every launch worktree, closing the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr); the builder neither locks nor unlocks it (lode-t76f). The harness does not reliably clear the lock on agent exit: for a reviewer/pickup launch worktree, `/code`'s per-ticket reclaim (`scripts/code-reclaim-launch-worktree.sh`) unlocks it itself when the lock reason names that worktree's own directory, on the orchestrator's own completion evidence (lode-7ndi); a builder's worktree is outside that reclaim — [why, and what that costs, below](#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f) |
-| Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
+| Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, via the `scripts/start-guards.sh` wrapper (lode-fg7w7.4) that then runs the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. Nothing is carried across calls in a shell variable (lode-lv04, lode-fvg0). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
-| Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
+| Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) at the start of the cycle, right after the isolation guard in the same `scripts/start-guards.sh` call (lode-fg7w7.4) — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Fable** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |

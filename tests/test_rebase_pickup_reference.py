@@ -51,16 +51,15 @@ def test_the_rebase_pickup_cycle_is_no_longer_in_the_coding_agent() -> None:
     assert "Merge current trunk in" in reference
 
 
-def test_reference_runs_both_guards_before_the_checkout_and_the_merge() -> None:
-    """The recycled-worktree guard resets and cleans, so it runs only after the
-    isolation guard has refused a main checkout; both precede the first command
-    that changes the tree."""
+def test_reference_runs_the_guards_before_the_checkout_and_the_merge() -> None:
+    """`start-guards.sh` runs the isolation guard and then the recycled-worktree
+    guard (which resets and cleans, so only after isolation has refused a main
+    checkout); it precedes the first command that changes the tree."""
     fenced = "\n".join(dict(markdown_corpus_blocks())[REBASE_PICKUP_REFERENCE])
     first_call = [
         fenced.find(command)
         for command in (
-            "scripts/isolation-guard.sh",
-            "scripts/recycled-worktree-guard.sh",
+            "scripts/start-guards.sh",
             "scripts/checkout-land-branch.sh",
             "git merge origin/trunk",
         )

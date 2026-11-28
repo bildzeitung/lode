@@ -261,6 +261,31 @@ DENIED = [
     'git commit -m "walking through" ; GH issue create --title x',
     "GH issue create --title x",
     "Gh pr create --title x",
+    # lode-2ctid: a real write after a newline OUTSIDE a multi-line quoted string.
+    'git commit -m "a\nb"\ngh issue create',
+    # lode-2ctid: joining an in-quote newline trusts the scanner's quote state. In every case
+    # below the write sits on its own line between two quote characters the shell does NOT read
+    # as a pair, so a join that trusted that state would hide it. Each construct is outside
+    # _split_unquoted's allowlist and must keep the write a segment of its own. Real bash runs
+    # the middle line of each (checked in review with a stand-in command name).
+    # -- a scan that ends inside a quote
+    "echo 'a\ngh issue create",
+    # -- a heredoc body is free text (the first write is a top-level command between two bodies)
+    "cat > f <<EOF\ndon't\nEOF\ngh pr create --title x\ncat >> f <<EOF\ncan't\nEOF",
+    "bash <<EOF\necho don't\ngh issue create\necho don't\nEOF",
+    "bash <<EOF\ndon't\ngh issue create\nEOF",
+    # -- an apostrophe in a comment opens no quote
+    "# don't forget\ngh issue create --title x\n# that's it",
+    "echo a # don't\ngh issue create --title x\necho b # that's it",
+    # -- command substitution inside double quotes separates commands at its own newlines
+    'echo "$(true\ngh issue create --title x)"',
+    'echo "`true\ngh issue create --title x`"',
+    'echo "$(echo "x"\ngh issue create)"',
+    # -- ANSI-C quoting: the escaped apostrophe does not close the string
+    "echo $'a\\'b'\ngh issue create\necho \\'",
+    # -- inside backticks the shell halves a doubled backslash first, so the apostrophe after
+    #    it is escaped, not an opening quote
+    "x=`echo \\\\'a\ngh issue create\n\\\\'`",
 ]
 
 # Commands that must NOT be denied. Three families, all load-bearing:
@@ -341,6 +366,18 @@ ALLOWED = [
     "bd create --title x --description y --type=task",
     "bd update lode-1 --add-label ready-for-code-review",
     "bd dep add lode-new lode-1 --type blocks",
+    # lode-2ctid: a quoted multi-line string whose continuation line starts with a gh verb. The
+    # second and third rows are the ticket's two controls (no in-quote newline at a gh verb).
+    'git commit -m "guard: x\n\ngh issue create is denied"',
+    'git commit -m "guard: gh issue create is denied"',
+    'git commit -m "x\n\nthe gh issue create verb is denied"',
+    "git commit -m 'x\ngh issue create'",
+    # lode-2ctid: what the join's allowlist must let through, or the fix stops reaching the
+    # commands it exists for -- `#`, `$` and backticks INSIDE single quotes or escaped, a
+    # backslash continuation, and ; & | > between commands.
+    'bd update lode-1 --notes "## Summary\ngh pr create was denied\n#12 is related"',
+    "bd update lode-1 \\\n  --notes 'costs $5\ngh pr create is `quoted` prose'",
+    'git add a.py b/c.py && git commit -q -m "x\ngh pr create is prose" 2>&1 | tail -5',
 ]
 
 # The hook must never *approve* anything: a non-matching command falls through silently so
@@ -519,6 +556,11 @@ def test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_r
     explicitly out of scope (docs/agents-workflow.md says closing it would false-deny this
     repo's own prose about the rule)."""
     assert _run('sh -c "gh issue create --title x"') is None
+    # lode-2ctid: a NEWLINE inside the quotes is the same residual as the `;` below it, not a
+    # separate case. A guard that reads only the command string cannot tell this from
+    # `git commit -m "true<newline>gh issue create ..."`, which must fall through.
+    assert _run('sh -c "true\ngh issue create --title x"') is None
+    assert _run('sh -c "true; gh issue create --title x"') is None
 
 
 # --- lode-vrhu: the *gh* substring pre-filter was too loose to gate _split_unquoted's O(n^2)
