@@ -186,8 +186,9 @@ from test_skill_bash_state import _bash_blocks, _strip_comment
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Every tracked `.sh` file in this repo lives directly under one of these
-# directories (the repo root holds `lode.sh`) (pinned by `test_scan_scope_covers_every_tracked_sh_file`) -- the
-# `.claude` half is lode-9bbq's scope correction: AC1's original scope
+# directories (pinned by `test_scan_scope_covers_every_tracked_sh_file`). Each is
+# globbed non-recursively, so the repo-root entry reaches top-level scripts only.
+# The `.claude` entry is lode-9bbq's scope correction: AC1's original scope
 # (`.claude/skills/**/SKILL.md` + `scripts/*.sh`) excluded `.claude/statusline.sh`
 # itself, the exact site that motivated this ticket.
 SH_GLOB_DIRS = [REPO_ROOT, REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
@@ -737,19 +738,24 @@ def test_a_prose_skip_never_excuses_a_fenced_invocation() -> None:
 
 def test_scan_scope_covers_every_tracked_sh_file() -> None:
     """No tracked .sh file silently falls outside SH_GLOB_DIRS. If this ever fails, a
-    new .sh file was added somewhere this gate's two globs don't reach -- widen
+    new .sh file was added somewhere this gate's globs don't reach -- widen
     SH_GLOB_DIRS, don't just let it fail quietly. The named assert is AC1's
     scope-widening correction: `.claude/statusline.sh` is the site lode-9bbq fixed and
     the reason this ticket exists, so it gets a failure message of its own rather than
-    only showing up inside a set diff."""
-    tracked = tracked_paths("*.sh")
+    only showing up inside a set diff. The globs read the working tree, so an
+    untracked .sh file in a scanned directory fails this too; the message names both
+    sides."""
+    tracked = set(tracked_paths("*.sh"))
     scanned = {
         str(p.relative_to(REPO_ROOT))
         for base in SH_GLOB_DIRS
         for p in base.glob("*.sh")
     }
     assert ".claude/statusline.sh" in scanned
-    assert set(tracked) == scanned, set(tracked) - scanned
+    assert tracked == scanned, (
+        f"tracked but not scanned: {sorted(tracked - scanned)}; "
+        f"scanned but not tracked: {sorted(scanned - tracked)}"
+    )
 
 
 def test_scan_scope_covers_agent_definitions() -> None:
@@ -782,9 +788,9 @@ def test_scan_scope_covers_agent_definitions() -> None:
 def test_no_unguarded_bd_list_call_sites() -> None:
     """The actual gate. Every operative `bd ... list` call site in scope -- fenced
     bash/sh blocks and inline backtick spans in .claude/skills/*/SKILL.md and
-    .claude/agents/*.md, plus every line of scripts/*.sh and .claude/*.sh -- must
-    carry --limit, unless the exact (file, snippet) pair is skip-listed with a
-    reason."""
+    .claude/agents/*.md, plus every line of the .sh files directly under
+    SH_GLOB_DIRS -- must carry --limit, unless the exact (file, snippet) pair is
+    skip-listed with a reason."""
     violations = apply_skips(_scan_corpus())
     assert not violations, "\n".join(
         f"{path}:{lineno if lineno != -1 else '?'}: unguarded `bd ... list` call "
