@@ -8,7 +8,7 @@ fiats. Keep it tight; it loads into every session.
 **Answering "what did we decide about X" starts with the docs-index tool, not with reading a doc.**
 `docs/decisions.md` alone is 400K+ and cannot be pulled into context, and the same lookup cost
 applies across every design doc under `docs/`. Run the on-demand FTS5 lookup CLI first — it rebuilds
-a never-tracked index over all of `docs/*.md` on every invocation:
+a never-tracked index over all of `docs/*.md` and `docs/decisions/*.md` on every invocation:
 
 ```bash
 uv run --frozen python scripts/docs_index_query.py "<search terms — a bd id, a phrase, anything>"
