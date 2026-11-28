@@ -2,12 +2,12 @@
 
 Fails (exit 1) on: a duplicate id, an id/filename mismatch, a missing or
 non-YYYY-MM-DD ``date``, a ``status`` outside open|decided, an entry superseded
-by 2+ entries, a ``supersedes`` or
-``related`` value that is not an inline list or names a target that does not
-exist, a ``supersedes`` cycle, and any modification or deletion of an entry
-file that exists where ``HEAD`` forked from the base ref. Exit 2 means the gate
-could not run (no merge base with the base ref) and is never a verdict on the
-entries. The format is defined in ``docs/decisions/README.md``.
+by 2+ entries, a ``supersedes`` or ``related`` value that is not an inline list
+or names a target that does not exist, a ``supersedes`` cycle, and any
+modification or deletion of an entry file that exists where ``HEAD`` forked
+from the base ref. Exit 2 means the gate could not run (no merge base with the
+base ref) and is never a verdict on the entries. The format is defined in
+``docs/decisions/README.md``.
 """
 
 from __future__ import annotations
@@ -25,7 +25,9 @@ app = typer.Typer(add_completion=False)
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "docs" / "decisions"
 _NAME_RE = re.compile(r"^([0-9a-z]{5})-.+\.md$")
 _LIST_RE = re.compile(r"^\[(.*)\]$")
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Month 01-12 and day 01-31, ASCII digits only (``\d`` also matches other
+# scripts' digits). A day past its month's end (02-31) still passes.
+_DATE_RE = re.compile(r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
 _STATUSES = ("open", "decided")  # superseded is derived from edges, never stored
 
 
@@ -52,8 +54,8 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]]:
 
 def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
     """``{id: {"path", "date", "supersedes", "related"}}`` plus the problems
-    found while loading (filename mismatch, duplicate id, an edge value that
-    is not an inline list)."""
+    found while loading (filename mismatch, duplicate id, a bad date or status,
+    an edge value that is not an inline list)."""
     entries: dict[str, dict] = {}
     problems: list[str] = []
     for path in sorted(directory.glob("*.md")):
@@ -88,14 +90,15 @@ def successors(entries: dict[str, dict]) -> dict[str, list[str]]:
     """The derived ``superseded_by`` map: old id -> the ids that supersede it."""
     out: dict[str, list[str]] = {}
     for entry_id, entry in entries.items():
-        for old in entry["supersedes"]:
+        # An id listed twice in one entry's list is still one successor.
+        for old in dict.fromkeys(entry["supersedes"]):
             out.setdefault(old, []).append(entry_id)
     return out
 
 
 def chain_head(entries: dict[str, dict], entry_id: str) -> str:
-    """Follow ``superseded_by`` from ``entry_id`` to an entry nothing supersedes.
-    With several successors, the newest by ``(date, id)`` wins. Stops on a cycle."""
+    """Follow ``superseded_by`` from ``entry_id`` to an entry nothing supersedes. Stops
+    on a cycle; on a fork (the gate fails both) the newest by ``(date, id)`` wins."""
     nxt, seen = successors(entries), {entry_id}
     while entry_id in nxt:
         entry_id = max(nxt[entry_id], key=lambda i: (entries[i]["date"], i))
@@ -114,8 +117,11 @@ def check_edges(directory: Path) -> list[str]:
                 for t in entry[key]
                 if t not in entries
             ]
+    # A fork fails so that every chain stays linear: the later correction has to
+    # supersede the earlier one, and a chain's head never rests on a tie-break.
     problems += [
-        f"{old}: superseded by {len(new)} entries ({', '.join(new)}); supersede the later one"
+        f"{entries[old]['path'].name}: superseded by {len(new)} entries"
+        f" ({', '.join(new)}); the newer one must supersede the other instead"
         for old, new in successors(entries).items()
         if len(new) > 1 and old in entries
     ]

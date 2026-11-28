@@ -50,7 +50,18 @@ def test_a_passing_supersedes_chain(entries: Path) -> None:
     assert _gate.chain_head(loaded, "ccccc") == "ccccc"
 
 
-@pytest.mark.parametrize("date", ["", "2026-3-1", "20260301", "March 1"])
+@pytest.mark.parametrize(
+    "date",
+    [
+        "",
+        "2026-3-1",
+        "20260301",
+        "March 1",
+        "2026-13-01",
+        "2026-01-32",
+        "２０２６-01-01",
+    ],
+)
 def test_a_missing_or_malformed_date_is_flagged(entries: Path, date: str) -> None:
     _entry(entries, "aaaaa", date=date)
     assert _gate.check_edges(entries) == ["aaaaa-x.md: date must be YYYY-MM-DD"]
@@ -81,9 +92,28 @@ def test_a_fork_of_two_successors_is_flagged(entries: Path) -> None:
     _entry(entries, "aaaaa")
     _entry(entries, "bbbbb", supersedes="[aaaaa]", date="2026-02-01")
     _entry(entries, "ccccc", supersedes="[aaaaa]", date="2026-03-01")
-    problems = _gate.check_edges(entries)
-    assert len(problems) == 1
-    assert problems[0].startswith("aaaaa: superseded by 2 entries (bbbbb, ccccc)")
+    (problem,) = _gate.check_edges(entries)
+    assert problem == (
+        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc);"
+        " the newer one must supersede the other instead"
+    )
+
+
+def test_superseding_an_entry_and_its_successor_is_a_fork(entries: Path) -> None:
+    """Every ``supersedes`` edge counts, so a correction names only the entry it
+    copies, not that entry's ancestors."""
+    _entry(entries, "aaaaa")
+    _entry(entries, "bbbbb", supersedes="[aaaaa]")
+    _entry(entries, "ccccc", supersedes="[aaaaa, bbbbb]")
+    assert [p.split(";")[0] for p in _gate.check_edges(entries)] == [
+        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc)"
+    ]
+
+
+def test_an_id_listed_twice_by_one_entry_is_not_a_fork(entries: Path) -> None:
+    _entry(entries, "aaaaa")
+    _entry(entries, "bbbbb", supersedes="[aaaaa, aaaaa]")
+    assert _gate.check_edges(entries) == []
 
 
 def test_duplicate_id_is_flagged(entries: Path) -> None:
