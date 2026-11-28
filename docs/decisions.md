@@ -8377,6 +8377,12 @@ file (probed at review: a missing doc path appended to it fails the session). Wh
 commit is the open decision `lode-3qi40`. The second: the `bd`-generated Session Completion block
 in `CLAUDE.md` and `AGENTS.md` says "Run quality gates (if code changed)"; `bd init` regenerates
 that block, and its own text puts it below repository instructions.
+
+**Update (lode-rzcvv, 2026-11-28) -- DECIDED (maintainer):** the first exemption is closed, option A of
+`lode-3qi40`. Both places in `.claude/skills/land/SKILL.md` that commit a `MISTAKES.md` entry on `trunk`
+(Section 4's block and the copy under Stop and report) run `nox -t everything-else` after the commit and
+before the push; on red the entry is fixed and re-committed, never pushed red. The "nothing `nox` would
+catch" justification is removed from Section 4.
 ## Decisions migration: how an entry's status is derived (decided, lode-m4rzt)
 
 Maintainer ruling 2026-11-28, option A of `lode-m4rzt`, raised at `/land`'s review of

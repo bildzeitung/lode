@@ -1252,9 +1252,9 @@ grep -niE "<ticket id>|<mechanism or file at fault>|<a paraphrase of the failure
   `/land` pass — already filed the same incident) → skip. Entries are append-only; do not double-file.
 - **Not present** → append a new entry at the **top** of the log (newest first), in directive 9's
   entry shape, then commit it **directly on `trunk`** — the same narrow exception CLAUDE.md's
-  workflow gotchas already carry for a direct doc-only trunk commit. This file is append-only prose
-  with no gate risk (no code, no tests, nothing `nox` or a technical review would catch), so unlike
-  an ordinary "gap" its remedy is never a decision that needs review:
+  workflow gotchas already carry for a direct doc-only trunk commit. This file is append-only prose,
+  so unlike an ordinary "gap" its remedy is never a decision that needs review. It is still gated:
+  `linkcheck` (`scripts/check_links.py`) reads `MISTAKES.md` (lode-rzcvv):
 
   ```bash
   scripts/assert-main-checkout.sh || exit 1                          # fresh Bash invocation; this commit names no ref or path either (lode-pxyt)
@@ -1262,6 +1262,15 @@ grep -niE "<ticket id>|<mechanism or file at fault>|<a paraphrase of the failure
   git commit --no-verify -q -m "docs: record <short incident name> in MISTAKES.md"   # --no-verify: same beads pre-commit hook reason as above
   git show --stat HEAD   # confirm only MISTAKES.md rode along
   ```
+
+  Then gate it, in the FOREGROUND, before the push below:
+
+  ```bash
+  uv run --frozen nox -t everything-else
+  ```
+
+  Red: fix the entry, amend or re-commit it, re-run, then push; never push red. A nonzero exit that
+  is a machine fault (not a finding) is a stop-and-report, as for the Section 3 re-gate.
 
   This commit rides in the same push as the reformat commit above and the merge commits already on
   `trunk` — I do not push separately per entry.
@@ -1804,6 +1813,13 @@ scripts/assert-main-checkout.sh || exit 1
 git add MISTAKES.md
 git commit --no-verify -q -m "docs: record <short incident name> in MISTAKES.md"
 git show --stat HEAD   # confirm only MISTAKES.md rode along
+```
+
+Gate it in the FOREGROUND before the push (lode-rzcvv; `linkcheck` reads `MISTAKES.md`). Red: fix the
+entry, amend or re-commit, re-run, then push; never push red.
+
+```bash
+uv run --frozen nox -t everything-else
 ```
 
 **This path has no merge push to ride in on — push it myself, right here**, since Section 4's own
