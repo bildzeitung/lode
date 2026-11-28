@@ -112,7 +112,7 @@ def test_escaped_backtick_does_not_hide_link_in_real_span():
 
 def test_backslash_inside_code_span_is_literal():
     # The span is `\`; the empty link after it is outside.
-    assert _lint(["`\\` [x]()"], 0) == [("MD042", 5, 9)]
+    assert _lint(["`\\` [x]()"], 0) == [("MD042", 4, 9)]
 
 
 def test_link_text_with_nested_brackets_is_flagged():
