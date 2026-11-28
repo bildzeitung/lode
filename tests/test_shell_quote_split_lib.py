@@ -264,11 +264,14 @@ def _split(text: str) -> str:
 def test_split_joins_a_newline_inside_a_quoted_argument() -> None:
     """lode-2ctid: a newline inside '...' or "..." belongs to one argument, so it must not start
     a segment; a newline outside quotes still does. The second pair pins what the join's
-    allowlist lets through outside the quotes: a backslash escape, a redirect, and ; & |."""
+    allowlist lets through outside the quotes: a backslash escape, a redirect, and ; & |. The
+    last line pins the whitespace besides space and newline (the reply is searched, not compared
+    whole, because `text=True` rewrites a carriage return)."""
     assert _split('a "b\nc" d\ne') == 'a "b c" d\ne'
     assert _split("a 'b\nc' d\ne") == "a 'b c' d\ne"
     assert _split('a \\\n -m "b\nc" 2>&1 | d; e') == 'a \\\n -m "b c" 2>\n1 \n d\n e'
     assert _split("a 'b #\n$c `d`' e=f:g,h/i.j") == "a 'b # $c `d`' e=f:g,h/i.j"
+    assert '"f g"' in _split('a\rb\fc\vd\te "f\ng"')
 
 
 @pytest.mark.parametrize(
