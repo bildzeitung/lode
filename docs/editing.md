@@ -55,7 +55,8 @@ maps five of them:
 | `list.marker` | bullet/ordered markers — **and thematic breaks**, which share the capture | `dark_sea_green4` |
 
 Unmapped, and left that way on purpose: `link.uri`, `link.label`,
-`punctuation.special` (block-quote markers, which the grammar emits as zero-width spans here),
+`punctuation.special` (block-quote markers and block continuations: the `>` on each line of a
+quote, the indent that continues a list item, and some zero-width spans),
 `string.escape` (a backslash escape, which the block grammar sees inside a reference-link
 definition or a fence info string, not in running text), and `none`.
 `none` is the load-bearing one — `lode-76go` found it is emitted
