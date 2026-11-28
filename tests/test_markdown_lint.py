@@ -1,0 +1,84 @@
+"""Unit tests for lode.markdown_lint (lode-o7pf.2)."""
+
+import subprocess
+import sys
+
+from lode.fence_parsing import fence_flags
+from lode.markdown_lint import lint_line, lint_line_tagged
+
+
+def _lint(lines, index, cursor=None):
+    return lint_line_tagged(lines, index, fence_flags(lines), cursor)
+
+
+def test_md009_trailing_whitespace_exact_range_non_ascii():
+    assert _lint(["café 🙂  x   "], 0) == [("MD009", 10, 13)]
+
+
+def test_md009_two_trailing_spaces_exempt_one_and_three_flagged():
+    assert _lint(["a  "], 0) == []
+    assert _lint(["a "], 0) == [("MD009", 1, 2)]
+    assert _lint(["a   "], 0) == [("MD009", 1, 4)]
+
+
+def test_md009_cursor_at_run_end_not_flagged_elsewhere_flagged():
+    lines = ["é "]
+    assert _lint(lines, 0, cursor=(0, 2)) == []
+    assert _lint(lines, 0, cursor=(0, 1)) == [("MD009", 1, 2)]
+    assert _lint(lines, 0, cursor=(1, 2)) == [("MD009", 1, 2)]
+
+
+def test_md010_each_tab_non_ascii():
+    assert _lint(["é\ta\t"], 0) == [("MD010", 1, 2), ("MD009", 3, 4), ("MD010", 3, 4)] or _lint(
+        ["é\ta\t"], 0
+    ) == [("MD010", 1, 2), ("MD010", 3, 4), ("MD009", 3, 4)]
+
+
+def test_md019_extra_spaces_after_marker_non_ascii():
+    assert _lint(["", "##   é title", ""], 1) == [("MD019", 4, 6)]
+
+
+def test_md018_dropped():
+    assert _lint(["#1234 x"], 0) == []
+    assert _lint(["#Heading"], 0) == []
+
+
+def test_md022_missing_blank_underlines_heading_text_non_ascii():
+    lines = ["intro", "# café ☕", "body"]
+    assert _lint(lines, 1) == [("MD022", 2, 8)]
+
+
+def test_md022_buffer_edges_exempt():
+    assert _lint(["# t", ""], 0) == []
+    assert _lint(["", "# t"], 1) == []
+    assert _lint(["# t"], 0) == []
+
+
+def test_md022_bare_heading_flags_marker_run_and_whitespace_neighbour_is_blank():
+    assert _lint(["x", "##", ""], 1) == [("MD022", 0, 2)]
+    assert _lint(["   ", "## t", "\t"], 1) == []
+
+
+def test_md042_empty_link_whole_range_non_ascii():
+    assert _lint(["é [text]() z"], 0) == [("MD042", 2, 10)]
+
+
+def test_inline_code_span_exempts_tab_and_empty_link():
+    assert _lint(["`a\tb [x]()`"], 0) == []
+    assert _lint(["``a\tb`` [x]()"], 0) == [("MD042", 9, 14)]
+    assert _lint(["a\tb [x]()"], 0) == [("MD010", 1, 2), ("MD042", 4, 9)]
+    assert _lint(["`unclosed\t"], 0) == [("MD010", 9, 10)]
+
+
+def test_fenced_content_and_delimiters_yield_nothing():
+    lines = ["~~~", "a\t ", "#  h", "~~~", "  ```py ", "  x\t", "  ```"]
+    assert all(_lint(lines, i) == [] for i in range(len(lines)))
+
+
+def test_lint_line_returns_plain_ranges():
+    assert lint_line(["a "], 0, [False]) == [(1, 2)]
+
+
+def test_module_imports_nothing_from_textual():
+    code = "import sys, lode.markdown_lint; sys.exit(any(m.startswith('textual') for m in sys.modules))"
+    assert subprocess.run([sys.executable, "-c", code]).returncode == 0
