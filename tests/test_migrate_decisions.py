@@ -20,14 +20,13 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "decisions_small.md"
 runner = CliRunner()
 
 MOVE = _mig.Override(
-    "move",
     "lode-fff1",
     "**Update (lode-aaa3, 2026-03-05):**",
     "misfiled under the second section",
     target="lode-aaa1",
 )
 DROP = _mig.Override(
-    "drop", "lode-fff1", "**Update (lode-fff2, 2026-03-06):**", "obsolete pointer"
+    "lode-fff1", "**Update (lode-fff2, 2026-03-06):**", "obsolete pointer"
 )
 
 
@@ -45,9 +44,7 @@ def _by_title(result, fragment: str):
 
 
 def _write(result, target: Path) -> None:
-    target.mkdir()
-    for entry in result.entries:
-        (target / entry.filename).write_text(_mig.render(entry), encoding="utf-8")
+    _mig.write_entries(target, result.entries)
 
 
 def test_splits_on_column_zero_bullets_and_sections_outside_fences() -> None:
@@ -117,9 +114,9 @@ def test_override_moves_and_drops_a_block_and_verify_accounts_for_it(
 
 
 def test_an_override_that_matches_nothing_or_twice_is_an_error() -> None:
-    bad_key = _mig.Override("drop", "lode-nope", "**Update (x", "x")
-    twice = _mig.Override("drop", "lode-eee1", "**Update (lode-eee2", "x")
-    bad_marker = _mig.Override("drop", "lode-fff1", "**Update (lode-zzz", "x")
+    bad_key = _mig.Override("lode-nope", "**Update (x", "x")
+    twice = _mig.Override("lode-eee1", "**Update (lode-eee2", "x")
+    bad_marker = _mig.Override("lode-fff1", "**Update (lode-zzz", "x")
     for override in (bad_key, twice, bad_marker):
         with pytest.raises(ValueError):
             _mig.migrate(_text(), overrides=(override,))
@@ -156,7 +153,7 @@ _SHIFTED = (
     "### Tail heading\n"
 )
 _SHIFT = _mig.Override(
-    "move", "lode-b1", "**Update (lode-a1, 2026-01-02)", "misfiled", target="lode-a1"
+    "lode-b1", "**Update (lode-a1, 2026-01-02)", "misfiled", target="lode-a1"
 )
 
 
@@ -189,11 +186,11 @@ def test_status_and_dates_are_derived_from_the_head() -> None:
     )
     assert _by_title(result, "Retry policy").date_source == "first paragraph"
     assert _by_title(result, "Retry policy").date == "2026-02-03"
-    assert cache.status_note.startswith("decided by Update (lode-aaa2")
+    assert cache.status_note.startswith("by Update (lode-aaa2")
     rotation = _by_title(result, "log rotation")
     assert rotation.status == "open"
     assert not rotation.status_unclear
-    assert rotation.status_note == "open title, no Update"
+    assert rotation.status_note == "no Update"
     assert rotation.date_source == "inferred from a neighbour"
     assert rotation.date == "2026-02-03"
     assert _by_title(result, "Fenced example").status == "decided"
@@ -256,6 +253,12 @@ def test_mapping_covers_every_heading_anchor_with_github_numbering() -> None:
     assert len(bullets) == sum(e.kind == "bullet" for e in result.entries)
 
 
+def test_an_explicit_anchor_the_mapping_has_no_row_for_is_an_error() -> None:
+    text = '# t\n\n- **A (2026-01-01).** x\n  <a id="pin"></a>\n'
+    with pytest.raises(ValueError, match="pin"):
+        _mig.migrate(text, overrides=())
+
+
 def test_unmapped_links_finds_a_dangling_anchor(tmp_path: Path) -> None:
     result = _mig.migrate(_text(), overrides=(), rng=random.Random(0))
     # Joined at run time so the repo-wide link scan does not read these as links.
@@ -284,7 +287,7 @@ def test_cli_writes_entries_and_mapping_and_prints_the_report(
     assert "(3 lines from line 38)" in result.output
     assert "SUSPECTS" in result.output
     assert "Every title with open wording (2):" in result.output
-    assert "line 13: open (open title, no Update)" in result.output
+    assert "line 13: open (no Update)" in result.output
     # A date found past the title is listed as a guess.
     assert "line 10: 2026-02-03 (first paragraph)" in result.output
     assert len(list(target.glob("*.md"))) == 9

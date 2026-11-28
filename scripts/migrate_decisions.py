@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import secrets
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
@@ -47,12 +46,12 @@ from typing import Annotated
 
 import typer
 
-from lode.docs_slug import github_slug
+from lode.docs_slug import anchor_slugs, github_slug
 from lode.fence_parsing import fence_flags
 
 app = typer.Typer(add_completion=False)
 
-_ENTRY_START_RE = re.compile(r"^(- \*\*|## )")
+_ENTRY_START_RE = re.compile(r"^(?:- \*\*|## )")
 _MARKER_RE = re.compile(r"\*\*Update \(")
 _MARKER_LINE_RE = re.compile(r"^\s*(?:- )?\*\*Update \(")
 _MARKER_ID_RE = re.compile(r"\*\*Update \(`?(lode-[\w.]*\w)")
@@ -94,14 +93,18 @@ class Override:
     ``source`` names an entry by a bd id found in exactly one entry's title;
     ``marker`` is the exact opening text of the one marker block in that entry
     to act on. A block runs from its marker line to the next blank line or the
-    next marker line.
+    next marker line. With a ``target`` (an entry key like ``source``) the
+    block moves to the end of that entry; without one it is dropped.
     """
 
-    action: str  # "move" or "drop"
     source: str
     marker: str
     reason: str
-    target: str | None = None  # "move" only: an entry key like ``source``
+    target: str | None = None
+
+    @property
+    def action(self) -> str:
+        return "move" if self.target else "drop"
 
 
 # The lode-d3snk Update was appended under the lode-fg7w7.3 section by mistake;
@@ -113,7 +116,6 @@ class Override:
 # (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
 OVERRIDES: tuple[Override, ...] = (
     Override(
-        "move",
         "lode-fg7w7.3",
         "**Update (lode-d3snk, 2026-11-27):**",
         "answers the 'Still missed' bullet of the lode-yt7q2 entry, per the "
@@ -121,13 +123,11 @@ OVERRIDES: tuple[Override, ...] = (
         target="lode-k813a",
     ),
     Override(
-        "drop",
         "lode-k813a",
         "**Update (lode-htkr3, 2026-11-27):**",
         "pointer to the misfiled lode-d3snk Update, obsolete once it is moved",
     ),
     Override(
-        "drop",
         "lode-fg7w7.3",
         "**Update (lode-htkr3, 2026-11-27):**",
         "pointer saying the lode-d3snk Update above does not belong here, "
@@ -197,13 +197,14 @@ def split_entries(text: str) -> tuple[int, list[Entry]]:
     return starts[0], entries
 
 
-def _key_pattern(key: str) -> re.Pattern[str]:
-    return re.compile(rf"(?<![\w-]){re.escape(key)}(?![\w-]|\.\w)")
+def _titled(entries: list[Entry], key: str) -> list[Entry]:
+    """The entries whose title carries the bd id ``key`` as a whole id."""
+    pattern = re.compile(rf"(?<![\w-]){re.escape(key)}(?![\w-]|\.\w)")
+    return [e for e in entries if pattern.search(e.title)]
 
 
 def find_entry(entries: list[Entry], key: str) -> Entry:
-    pattern = _key_pattern(key)
-    hits = [e for e in entries if pattern.search(e.title)]
+    hits = _titled(entries, key)
     if len(hits) != 1:
         raise ValueError(f"override key {key!r} matches {len(hits)} entry titles")
     return hits[0]
@@ -285,17 +286,16 @@ def derive_date(entry: Entry) -> None:
 
 
 def fill_missing_dates(entries: list[Entry]) -> None:
-    """An entry with no date anywhere takes the nearest dated entry's: the
-    preceding one, or the following one when none precedes."""
-    dated = [e for e in entries if e.date]
-    if not dated:
+    """An entry with no date anywhere takes the preceding entry's date; those
+    ahead of the first dated entry take that entry's."""
+    prev = next((e.date for e in entries if e.date), None)
+    if prev is None:
         raise ValueError("no entry carries a date")
-    for i, entry in enumerate(entries):
+    for entry in entries:
         if entry.date:
-            continue
-        before = [e for e in entries[:i] if e.date]
-        entry.date = (before[-1] if before else next(e for e in entries if e.date)).date
-        entry.date_source = "inferred from a neighbour"
+            prev = entry.date
+        else:
+            entry.date, entry.date_source = prev, "inferred from a neighbour"
 
 
 def _marker_texts(entry: Entry) -> list[str]:
@@ -315,16 +315,14 @@ def derive_status(entry: Entry) -> None:
     ruling = next((t for t in markers if _RULING_RE.search(t)), None)
     if ruling is not None:
         entry.status = "decided"
-        entry.status_note = f"decided by Update ({' '.join(ruling.split())[:50]}"
+        entry.status_note = f"by Update ({' '.join(ruling.split())[:50]}"
     elif markers:
         entry.status_unclear = "open title; Updates present, none reads as a ruling"
     else:
-        entry.status_note = "open title, no Update"
+        entry.status_note = "no Update"
 
 
-def assign_names(
-    entries: list[Entry], rng: random.Random | secrets.SystemRandom
-) -> None:
+def assign_names(entries: list[Entry], rng: random.Random) -> None:
     taken: set[str] = set()
     for entry in entries:
         while True:
@@ -346,17 +344,20 @@ def render(entry: Entry) -> str:
     )
 
 
-def find_suspects(entries: list[Entry]) -> list[str]:
-    """Markers whose wording or id points at an entry other than the one they
-    sit in, and every column-zero Update head (an entry of its own that
-    corrects an earlier one). For the reviewer to move or reject."""
+def find_suspects(entries: list[Entry]) -> list[tuple[int, str]]:
+    """``(marker line, report row)`` for each marker whose wording or id points
+    at an entry other than the one it sits in, and for every column-zero Update
+    head (an entry of its own that corrects an earlier one). For the reviewer
+    to move or reject."""
     out = []
     for entry in entries:
         if _MARKER_RE.match(entry.lines[0][2:]):
-            out.append(
-                f"line {entry.start_line}: column-zero Update entry {entry.title[:70]!r}; "
-                "a separate entry, not merged into the entry it corrects"
+            row = (
+                f"line {entry.start_line}: column-zero Update entry "
+                f"{entry.title[:70]!r}; a separate entry, not merged into the "
+                "entry it corrects"
             )
+            out.append((entry.start_line, row))
     for entry in entries:
         body = "".join(entry.lines)
         for m in _MARKER_RE.finditer(body):
@@ -368,27 +369,26 @@ def find_suspects(entries: list[Entry]) -> list[str]:
             elif _POINTS_ELSEWHERE_RE.search(text[:300]):
                 why.append("wording points at another entry")
             lead = _MARKER_ID_RE.match(text)
-            if lead and not _key_pattern(lead.group(1)).search(entry.title):
-                homes = [
-                    e for e in entries if _key_pattern(lead.group(1)).search(e.title)
-                ]
+            homes = _titled(entries, lead.group(1)) if lead else []
+            if entry not in homes:
                 why += [
                     f"its id {lead.group(1)} heads the entry at line {h.start_line}"
                     for h in homes
                 ]
             for named in _NAMED_ENTRY_RE.findall(text[:300]):
-                homes = [e for e in entries if _key_pattern(named).search(e.title)]
+                homes = _titled(entries, named)
                 if homes and entry not in homes:
                     why.append(f"names the {named} entry at line {homes[0].start_line}")
             if why:
-                out.append(
+                row = (
                     f"line {line} (entry at line {entry.start_line}): "
                     f"{'; '.join(dict.fromkeys(why))}: {text[:70]!r}"
                 )
-    return list(dict.fromkeys(out))
+                out.append((line, row))
+    return out
 
 
-def build_mapping(text: str, entries: list[Entry], preamble_lines: int) -> list[dict]:
+def build_mapping(text: str, entries: list[Entry]) -> list[dict]:
     """Every old heading anchor (any level, outside fences) and every entry
     title -> its new file. Anchors repeat as GitHub numbers them (-1, -2)."""
     lines = text.splitlines(keepends=True)
@@ -419,6 +419,12 @@ def build_mapping(text: str, entries: list[Entry], preamble_lines: int) -> list[
                 "new_file": home.filename if home else "README.md",
             }
         )
+    # The numbering above is a copy of ``anchor_slugs``'s, which returns no
+    # line numbers. It also returns explicit ``<a id>`` anchors, which get no
+    # row here, so one of those in the source fails this check too.
+    drift = {r["old_anchor"] for r in rows} ^ anchor_slugs(text)
+    if drift:
+        raise ValueError(f"anchors differ from lode.docs_slug's: {sorted(drift)}")
     for entry in entries:
         if entry.kind == "bullet":
             rows.append(
@@ -436,7 +442,7 @@ def build_mapping(text: str, entries: list[Entry], preamble_lines: int) -> list[
 def migrate(
     text: str,
     overrides: tuple[Override, ...] | None = None,
-    rng: random.Random | secrets.SystemRandom | None = None,
+    rng: random.Random | None = None,
 ) -> Result:
     preamble_lines, entries = split_entries(text)
     if not entries:
@@ -448,15 +454,21 @@ def migrate(
     result.applied = apply_overrides(
         entries, OVERRIDES if overrides is None else overrides
     )
-    handled = tuple(f"line {a.source_line} " for a in result.applied)
-    result.suspects = [s for s in suspects if not s.startswith(handled)]
+    handled = {a.source_line for a in result.applied}
+    result.suspects = [row for line, row in suspects if line not in handled]
     for entry in entries:
         derive_date(entry)
         derive_status(entry)
     fill_missing_dates(entries)
-    assign_names(entries, rng or secrets.SystemRandom())
-    result.mapping = build_mapping(text, entries, preamble_lines)
+    assign_names(entries, rng or random.SystemRandom())
+    result.mapping = build_mapping(text, entries)
     return result
+
+
+def write_entries(target: Path, entries: list[Entry]) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        (target / entry.filename).write_text(render(entry), encoding="utf-8")
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -520,17 +532,20 @@ def unmapped_links(repo_root: Path, mapping: list[dict]) -> tuple[int, list[str]
     link_re = re.compile(r"decisions\.md#([A-Za-z0-9_%.-]+)")
     found = 0
     missing: list[str] = []
-    for path in sorted(repo_root.rglob("*")):
-        if not path.is_file() or skip & set(path.relative_to(repo_root).parts):
-            continue
-        try:
-            body = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):  # fmt: skip
-            continue
-        for anchor in link_re.findall(body):
-            found += 1
-            if anchor not in known:
-                missing.append(f"{path.relative_to(repo_root)}: #{anchor}")
+    for directory, subdirs, names in repo_root.walk():
+        # Pruned in place, so a skipped tree (a ``.venv`` is about 36,000
+        # paths) is never entered.
+        subdirs[:] = sorted(d for d in subdirs if d not in skip)
+        for name in sorted(names):
+            path = directory / name
+            try:
+                body = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):  # fmt: skip
+                continue
+            for anchor in link_re.findall(body):
+                found += 1
+                if anchor not in known:
+                    missing.append(f"{path.relative_to(repo_root)}: #{anchor}")
     return found, missing
 
 
@@ -624,9 +639,7 @@ def main(
         source.read_text(encoding="utf-8"),
         rng=random.Random(seed) if seed is not None else None,
     )
-    target.mkdir(parents=True, exist_ok=True)
-    for entry in result.entries:
-        (target / entry.filename).write_text(render(entry), encoding="utf-8")
+    write_entries(target, result.entries)
     mapping_path = mapping or target.resolve().parent / f"{target.name}-mapping.json"
     mapping_path.write_text(
         json.dumps(result.mapping, indent=2) + "\n", encoding="utf-8"
