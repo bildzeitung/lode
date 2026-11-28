@@ -109,8 +109,7 @@ uv run --frozen python scripts/docs_index_query.py "<terms>"
 - The env lives at **`./.venv`** (repo root), not in module subdirs.
 - Any merge to `trunk` outside `/land` gets **`nox -t fix`**, **`nox -s tests`** and
   **`nox -t everything-else`** on the merged result before it is pushed, whatever file types it
-  touches (a docs-only or shell-only merge included; direct merges are permitted). Run tests via
-  nox, not a hand-rolled venv.
+  touches (direct merges are permitted). Run tests via nox, not a hand-rolled venv.
 - Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
 - `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is where exact versions live
   for every `uv sync` / `uv run --frozen`, which never re-locks, and it is the only place they

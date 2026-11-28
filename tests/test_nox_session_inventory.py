@@ -166,7 +166,7 @@ def test_the_derivation_is_not_vacuous() -> None:
     copy of the very thing this file exists to stop anyone hand-maintaining,
     and would make every legitimate session addition a three-file edit. What
     is asserted instead never goes stale: both derivations found something,
-    the ``fix`` and ``tests`` sessions CLAUDE.md's merge gate names exist, and the
+    the ``fix`` and ``tests`` merge-gate sessions exist, and the
     default set is a subset of all sessions -- without which the opt-in
     count, derived by subtraction, would be meaningless.
     """
@@ -175,8 +175,8 @@ def test_the_derivation_is_not_vacuous() -> None:
     assert invocations, f"no @nox.session functions found in {NOXFILE_PATH}"
     assert defaults, f"nox.options.sessions parsed as empty in {NOXFILE_PATH}"
     assert {"fix", "tests"} <= set(invocations), (
-        "noxfile.py no longer defines the fix and tests sessions CLAUDE.md's merge "
-        "gate names -- either the parse broke, or this is a much bigger change "
+        "noxfile.py no longer defines the fix and tests merge-gate sessions -- "
+        "either the parse broke, or this is a much bigger change "
         "than a docstring edit"
     )
     assert defaults <= set(invocations), (
