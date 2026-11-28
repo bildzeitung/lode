@@ -259,6 +259,18 @@ _OTHER_SKIP_EXTENSIONS = {
     ".gif",
     ".ico",
 }
+#: Markdown links excused although their target is gone: ``(source file from
+#: the repo root, destination as written)``. ``docs/decisions.md`` is a dated
+#: log whose entries are never edited (its preamble, lode-1dmu), so a link
+#: from an old entry to a file deleted later cannot be fixed in its source.
+#: Only such a link belongs here; any other dead link is fixed where it is
+#: written. ``tests/test_check_links.py`` fails on a pair that excuses nothing.
+HISTORICAL_DEAD_LINKS = frozenset(
+    {
+        ("docs/decisions.md", "../scripts/docs_index_loader.py"),
+        ("docs/decisions.md", "../tests/test_docs_index_loader.py"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -657,8 +669,11 @@ def check(root: Path) -> list[LinkError]:
         except OSError as exc:
             errors.append(_unreadable_error(source, exc))
             continue
+        source_rel = source.relative_to(root).as_posix()
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
+                continue
+            if (source_rel, target) in HISTORICAL_DEAD_LINKS:
                 continue
             file_part, _, anchor = target.partition("#")
             # The path of a link is percent-encoded (`sp%20ace.md`). Decoded

@@ -1,8 +1,8 @@
 r"""Guards docs/decisions.md's supersession-marker convention (lode-ur6o).
 
 The convention itself is stated once, in that file's own preamble; this module
-deliberately does not restate it, so the two cannot drift. It pins three
-properties, because any one alone leaves a hole:
+deliberately does not restate it, so the two cannot drift. It pins two
+properties, because either alone leaves a hole:
 
 *No off-pattern marker.* A stale-flag keyword opening a bold span, a
 blockquote, or a parenthetical, with no ``Update (`` on the line to make it
@@ -53,22 +53,6 @@ normalizations -- the fix for the ticket reintroducing the ticket's own
 defect. The off-pattern scan cannot see it (nothing off-pattern is present),
 so it is pinned separately.
 
-*No marker cut off from its entry* (the preamble's lode-v1gnv and lode-px81z
-paragraphs, which give the mechanism). The scan takes its units from the
-chunker (``scripts/docs_index_chunker.py``) and holds no copy of its boundary
-rule.
-
-- Accepted over-match: the scan cannot tell a cut-off marker from a new entry
-  whose head opens with the lead-in, so that head goes red too. The way out
-  is again to reword the head.
-- Excused: seven entries before the first ``##`` heading whose own head opens
-  with the lead-in, by name in ``_DETACHED_ALLOWLIST``.
-- KNOWN MISS: an indented marker under a ``##`` section that ends in its own
-  column-zero bullet list is indexed with the last bullet of that list, not
-  with the heading. The lode-21sxk section ends that way. The query's NOTE
-  covers it (lode-8cp63): a hit on the section's heading unit or on an earlier
-  bullet lists the markers below it.
-
 Every scan is a module-level helper taking its lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
@@ -95,16 +79,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from conftest import load_module_from_path
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
-
-# A name private to this module: tests/test_docs_index_chunker.py loads the
-# same file as "docs_index_chunker", and a second load under one name asserts.
-_chunker = load_module_from_path(
-    "_marker_gate_docs_index_chunker", REPO_ROOT / "scripts" / "docs_index_chunker.py"
-)
 
 # Marker vocabulary, matched in TitleCase and ALL-CAPS but deliberately NOT
 # lowercase: a case-insensitive group false-positives on ordinary parenthesised
@@ -332,99 +308,3 @@ def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
     first pass shipped."""
     assert _wrapped_markers(["  **Update (lode-", "  zzzz) - the wrapped id.**"])
     assert not _wrapped_markers(["  **Update (lode-zzzz) - the same id, intact.**"])
-
-
-_COLUMN_ZERO_UPDATE = re.compile(r"-\s+\*\*Update \(")
-
-
-# Heads that open with the Update lead-in and predate this gate (lode-px81z).
-# A committed line cannot be reworded, so each is excused by its head through
-# the lead-in's closing parenthesis; the reason names the entry it bears on,
-# which carries its own indented marker. Never add a key: reword a new head.
-_DETACHED_ALLOWLIST: dict[str, str] = {
-    "- **Update (lode-nt98, lode-qv5t, 2026-07-20)": "corrects the lode-g387 entry",
-    "- **Update (`lode-5ido`, 2026-08-08)": "corrects the lode-p8zl rulings entry",
-    "- **Update (lode-8n4k, 2026-08-08)": "corrects the lode-2m89 entry",
-    "- **Update (lode-5x01, 2026-11-16)": "corrects the lode-s09w entry",
-    "- **Update (lode-v3xd, 2026-11-19)": "rules on the lode-3xzy entry",
-    "- **Update (lode-t9h1, 2026-11-20)": "extends the lode-v3xd entry",
-    "- **Update (lode-gcbg, 2026-11-18)": "confirms the lode-jb2q entry",
-}
-
-
-def _update_heads(lines: list[str]) -> list[_chunker.Unit]:
-    """Index units that open with a column-zero ``- **Update (`` bullet."""
-    # The chunker keys its entry-log rules on the file's name, so the sample
-    # inputs of the non-vacuity test are chunked under the real path too.
-    units = _chunker.chunk_file(DECISIONS, "\n".join(lines))
-    return [unit for unit in units if _COLUMN_ZERO_UPDATE.match(unit.first_line)]
-
-
-def _detached_updates(
-    lines: list[str], allowlist: Iterable[str] = _DETACHED_ALLOWLIST
-) -> list[str]:
-    """The :func:`_update_heads` units (lode-v1gnv, lode-px81z), minus the
-    ``allowlist`` heads."""
-    excused = tuple(allowlist)
-    return [
-        f"  L{unit.line_lo}: {unit.first_line.strip()}"
-        for unit in _update_heads(lines)
-        if not unit.first_line.startswith(excused)
-    ]
-
-
-def test_no_update_marker_detached_from_its_entry() -> None:
-    """An Update marker appended to an entry is indented under it."""
-    detached = _detached_updates(_decisions_lines())
-
-    assert not detached, (
-        "docs/decisions.md has a column-zero '- **Update (' bullet that the "
-        "docs index cuts off as a unit of its own, so a hit on the entry it "
-        "corrects never shows it. If it is a marker on the entry above it (a "
-        "'##' section or a top-level bullet), indent it two spaces under "
-        "that entry. If it is a new entry of its own, reword its head so "
-        "that it does not open with the Update lead-in (lode-v1gnv, "
-        "lode-px81z):\n" + "\n".join(detached)
-    )
-
-
-def test_every_detached_allowlist_entry_excuses_exactly_one_live_head() -> None:
-    """A key matching nothing is a dead excuse; one matching two heads excuses
-    a head nobody vetted."""
-    heads = _update_heads(_decisions_lines())
-    for allowed, reason in _DETACHED_ALLOWLIST.items():
-        assert reason.strip(), f"allowlist entry {allowed!r} carries no reason"
-        excused = [u.line_lo for u in heads if u.first_line.startswith(allowed)]
-        assert len(excused) == 1, (
-            f"allowlist entry {allowed!r} must excuse exactly one head, but "
-            f"excuses those at lines {excused}. A second head is not excused: "
-            "indent it under its entry, or reword it"
-        )
-
-
-def test_detached_update_scan_is_not_vacuous() -> None:
-    """The scan fires on a column-zero Update bullet after a ``##`` section or
-    after a pre-``##`` top-level entry, directly or behind another appended
-    entry, and leaves the indented shape, an Update inside a fence and an
-    allowlisted head alone."""
-    entry = ["## An entry (decided, lode-zzzz)", "", "Closing paragraph."]
-    update = "- **Update (lode-yyyy, 2026-01-01): the correction.**"
-    detached = [*entry, "", update]
-    after_entry = [*entry, "", "- **An appended entry (lode-xxxx).**", update]
-    indented = [*entry, "", f"  {update}"]
-    fenced = [*entry, "```", update, "```"]
-    # The chunker cuts the text before the first heading at its bullets only
-    # when that text is over MAX_UNIT_BYTES, as the real file's is.
-    bullet = "- A pre-heading entry (lode-wwww). " + "x" * _chunker.MAX_UNIT_BYTES
-    pre_heading = [bullet, "", update, *entry]
-    pre_heading_indented = [bullet, f"  {update}", *entry]
-
-    assert _detached_updates(detached)
-    assert _detached_updates(after_entry)
-    assert not _detached_updates(indented)
-    assert not _detached_updates(fenced)
-    assert _detached_updates(pre_heading)
-    assert not _detached_updates(pre_heading_indented)
-    assert not _detached_updates(
-        pre_heading, allowlist=["- **Update (lode-yyyy, 2026-01-01)"]
-    )

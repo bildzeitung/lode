@@ -23,8 +23,8 @@ work on lode faster, for humans and agents alike:
 | Tool | Why | Notes |
 |---|---|---|
 | **fd** | Fast, gitignore-aware file finding — the `find` counterpart to ripgrep for "list files matching X, excluding `.venv/` and `.claude/worktrees/`" sweeps. | Debian/Ubuntu package `fd-find` installs the binary as **`fdfind`**; symlink or alias to `fd` if you want the short name. `apt-get install fd-find` / `brew install fd`. |
-| **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores and the on-demand docs FTS5 index — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
-| **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval, docs-index rebuild — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
+| **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
+| **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
 
 ## Install & setup
 
