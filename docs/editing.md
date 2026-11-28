@@ -221,19 +221,20 @@ already clears Textual's line cache (and Textual must keep that clear, since its
 include the text). Rules may read neighbouring lines. Two costs follow from where the hook sits:
 Textual calls `get_line` once per **wrapped row**, not once per document line, and with soft wrap
 on (the default, which `_markdown_text_area` keeps) every cursor move re-fetches every visible row,
-not only an edit.
+not only an edit. The rule engine runs once per line per pass, though: see Fence context.
 
 **Fence context.** Fence state comes from `lode.fence_parsing` (`fence_flags` /
 `match_fence_marker`), the repo's one sanctioned CommonMark fence scanner. `fence_flags` is
 whole-buffer O(n), so its result is memoized for **one render pass**: built on the first `get_line`
 call of the pass and dropped when the pass ends (a `render_lines` override brackets a pass), so a
-repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Only a
-pass keeps the memo: a `get_line` call outside one scans the fences itself and keeps nothing.
-Textual makes such calls (its mouse hit-testing calls `render_line` directly) and stores what they
-return in its line cache, and one can come after an edit and before the repaint, so flags kept from
-the last pass could put a wrong underline on screen until the next edit. Lines
-inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
-opener as outside, so the opener is checked with `match_fence_marker`).
+repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. A line's
+lint ranges are memoized by line index for the same pass, so a soft-wrapped line is linted once
+however many rows it draws (`lode-tgksm`). Only a pass keeps either memo: a `get_line` call outside
+one scans the fences itself and keeps nothing. Textual makes such calls (its mouse hit-testing calls
+`render_line` directly) and stores what they return in its line cache, and one can come after an
+edit and before the repaint, so flags kept from the last pass could put a wrong underline on screen
+until the next edit. Lines inside a fence and fence delimiter lines are exempt from every rule
+(`fence_flags` reports the opener as outside, so the opener is checked with `match_fence_marker`).
 
 **Rules (v1).** Hand-rolled pure functions over `(lines, index, fence context, cursor)` returning
 character ranges `[start, end)` on that line; no new dependency (no `pymarkdownlnt`). `cursor` is

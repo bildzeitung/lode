@@ -155,6 +155,30 @@ async def test_one_fence_scan_per_render_pass(monkeypatch) -> None:
 
 
 @_sync
+async def test_one_lint_per_line_per_render_pass(monkeypatch) -> None:
+    linted: list[int] = []
+
+    def counting_lint_line(lines, index, flags, cursor):
+        linted.append(index)
+        return lint_line(lines, index, flags, cursor)
+
+    monkeypatch.setattr(lint_text_area, "lint_line", counting_lint_line)
+    app = _App(soft_wrap=True)
+    async with app.run_test(size=(40, 20)) as pilot:
+        area = app.query_one(LintTextArea)
+        area.load_text("word " * 60 + "[a]() tail\t\n")
+        await pilot.pause()
+        linted.clear()
+        area.render_lines(Region(0, 0, 40, 20))
+        assert linted == [0]
+        # Outside a pass nothing is kept.
+        area.get_line(0)
+        area.get_line(0)
+        assert linted == [0, 0, 0]
+        assert area.lint_ranges is None
+
+
+@_sync
 async def test_soft_wrap_long_line() -> None:
     app = _App(soft_wrap=True)
     async with app.run_test(size=(40, 20)) as pilot:
@@ -243,6 +267,7 @@ async def test_perf_2000_lines() -> None:
         best = float("inf")
         for _ in range(5):
             area.lint_fence_flags = None
+            area.lint_ranges = {}
             t0 = time.perf_counter()
             for i in range(n):
                 area.get_line(i)
