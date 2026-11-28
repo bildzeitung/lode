@@ -91,17 +91,17 @@ consistently across terminals without requiring truecolor.
 
 Only **primary** and **accent** are brand colours the TUI palette may use, and only as 256-colour
 names, never hex, never ANSI 0–15. **Ink and paper are web-only** — the TUI never sets an explicit
-foreground/background colour derived from this palette at all; it inherits the user's terminal
-theme. The rule above binds new brand-coloured surfaces only — neither existing styling surface is
-a precedent for it, and this brief does not retroactively bind them. `lode.cli.CLI_STYLES` maps its
-semantic names (`note_id`, `warn`, `danger`) onto *ANSI* colours — `cyan`, `yellow`, `bold red` —
-deliberately, because CLI status colour *should* follow whatever the user's terminal theme makes of
-those names; only `NOTE_BODY_THEME` moved into the 256-colour range (the lesson above), a syntax
-palette needing a predictable intensity. And `docs/decisions.md` records the current note-body
-values as chosen for a **dark** terminal, so lode is not today free of every light/dark assumption
-— that gap is `lode-5zxt`, not something this brief closes.
-This brief does not introduce a third palette
-mechanism; a future TUI surface that wants the brand's primary or accent reaches for
+foreground/background colour derived from this palette at all; its foreground and background come
+from the Textual theme (dark by default; `[tui.theme]` selects another). The rule above binds new
+brand-coloured surfaces only — neither existing styling surface is a precedent for it, and this
+brief does not retroactively bind them. `lode.cli.CLI_STYLES` maps its semantic names (`note_id`,
+`warn`, `danger`) onto *ANSI* colours — `cyan`, `yellow`, `bold red` — deliberately, because CLI
+status colour *should* follow whatever the user's terminal theme makes of those names; only
+`NOTE_BODY_THEME` moved into the 256-colour range (the lesson above), a syntax palette needing a
+predictable intensity. The default note-body values were chosen for a **dark** background, which the
+default theme supplies; a user who selects a light theme through `[tui.theme]` can adjust them
+through `[tui.theme.syntax]` (both in `docs/configuration.md`). This brief does not introduce a
+third palette mechanism; a future TUI surface that wants the brand's primary or accent reaches for
 `slate_blue3` / `dark_goldenrod` by name, through whichever of the two existing mechanisms
 (`CLI_STYLES` for CLI/rich, a `TextAreaTheme`-style dict for Textual widgets) fits the surface —
 never a new one.
@@ -110,12 +110,12 @@ never a new one.
 
 - Not a "brand blue" gradient, not a multi-stop scheme — two colours plus the two web-only
   neutrals is the whole palette. Nothing here needs a design-system's worth of tints and shades.
-- Not user-configurable. `docs/decisions.md` (`lode-dmbc`) records this as an explicitly deferred,
-  open question — lode currently has three unrelated styling surfaces (`CLI_STYLES`, a rich
-  `Theme`; `NOTE_BODY_THEME`, a Textual `TextAreaTheme`; `lode.tcss`, the app-wide stylesheet) that
-  share no code path, so a single "brand colour" setting would be a lie by omission until (or
-  unless) that's unified. This brief states the *intended* colours; it does not claim they are
-  configurable.
+- Not a single user setting. The styling surfaces are configurable separately, through the
+  `[tui.theme]` and `[cli.theme]` sections documented in `docs/configuration.md`. Neither is a
+  "brand colour" setting. The `primary` and `accent` keys of `[tui.theme.colors]` are Textual's
+  theme variables, which `lode.tcss` styles the chrome with, not this brief's primary and accent. No
+  TUI or CLI surface uses `slate_blue3` or `dark_goldenrod` today. This brief states the *intended*
+  brand colours; it does not claim they are configurable.
 
 ## 4. Typography
 
@@ -159,8 +159,7 @@ than by accident.
   themselves the argument for why this is worth using.
 - **Comfortable with open questions.** `docs/decisions.md` exists and is linked, not buried,
   because the project treats "we haven't decided this yet" as a normal, statable fact rather than
-  something to paper over. Brand copy should do the same — this brief itself states plainly, in
-  §3, that palette configurability is deferred rather than pretending it doesn't matter.
+  something to paper over. Brand copy should do the same.
 - **Terse over exhaustive, but never at the cost of a citation.** Match the density of the rest of
   `docs/` — a reader who lands on any lode page should not be able to tell, from voice alone,
   whether they're reading the brand brief or the retrieval design doc.
