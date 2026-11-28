@@ -21,6 +21,10 @@ Newest first.
   tests` and `nox -t everything-else` on the merged result first, whatever file types it
   touches. The corpus-scan gates under `tests/` cover shell scripts and markdown, not only
   Python.
+  - **Update (lode-0gkjq, 2026-11-28):** CLAUDE.md's pre-merge rule is no longer worded for
+    "any Python change". By maintainer ruling (`lode-31kju`, option A) it now covers every
+    merge to `trunk` outside `/land`, whatever file types it touches, and names `nox -t fix`
+    beside the two gates above.
 
 ## 2026-11-23 — A memory-bound claim in docs/ could not be re-verified because the measurement script behind it was not kept
 

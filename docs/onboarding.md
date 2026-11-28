@@ -196,10 +196,11 @@ cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2
 
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./.venv`**, not an isolated
 env, so run it as `uv run --frozen nox ...`. `nox -t fix` and `nox -s tests` are the two entry
-points REQUIRED before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
-invocation also runs `nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`,
-`nox -s decisions_entries`, and `nox -s docs` (seven sessions total; see
-[`noxfile.py`](../noxfile.py)'s module docstring for what those five check):
+points you will use most; which gates a merge to `trunk` owes is stated once, in
+[CLAUDE.md](../CLAUDE.md#python-environment). A bare `nox` invocation also runs
+`nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`, `nox -s decisions_entries`, and
+`nox -s docs` (seven sessions total; see [`noxfile.py`](../noxfile.py)'s module docstring for what
+those five check):
 
 ```bash
 uv run --frozen nox -t fix    # ruff format + ruff check --fix
@@ -296,7 +297,8 @@ Four project rules that bite newcomers; [CLAUDE.md](../CLAUDE.md) is authoritati
   git worktree under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef:
   "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually
   small, never measured). Merge back with `--no-ff`.
-- **Gate before merging:** `nox -t fix` and `nox -s tests`.
+- **Gate before merging,** whatever file types the merge touches: the gate list is in
+  [CLAUDE.md](../CLAUDE.md#python-environment).
 - **A pre-commit hook re-exports and stages `.beads/issues.jsonl` on every commit.** Stage
   explicit paths — never `git add -A`.
 - **Close the session by pushing both wires:** `git push` *and* `bd dolt push`.
