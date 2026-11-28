@@ -224,16 +224,15 @@ hand-off metadata and swap the label myself, with the same one-script derive →
 fresh-build hand-off:
 
 ```bash
-scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --append-notes "REBASE PICKUP: merged trunk into the branch; <clean merge, or each conflicting file and which side's content survived; plus any docs/decisions.md lines moved in step 3>"
+scripts/handoff-sha.sh <id> land_head --push --remove-label needs-rebase --add-label ready-for-land --append-notes "REBASE PICKUP: merged trunk into the branch; <clean merge, or each conflicting file and which side's content survived; plus any docs/decisions.md lines moved in step 3>"
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
-3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed). The note is
-the only prose record of my merge, and `land-review` reads it.
-
-```bash
-scripts/bd-dolt-push.sh
-```
+3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed), with one
+exception: 6 = the write WAS done but `--push`'s publish failed, so I run `scripts/bd-dolt-push.sh`
+alone and never re-run the hand-off, which would append the note a second time. `--push` runs
+`scripts/bd-dolt-push.sh` after the write (lode-fg7w7.5). The note is the only prose record of my
+merge, and `land-review` reads it.
 
 The push publishes the label swap + refreshed SHA over `refs/dolt/data`.
 

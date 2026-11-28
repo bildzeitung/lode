@@ -609,17 +609,15 @@ value here reads as drift on a later `/land` pass, and a copy between calls is h
 (lode-0a4n):
 
 ```bash
-scripts/handoff-sha.sh <id> land_head --remove-label ready-for-code-review --add-label ready-for-land --set-metadata land_summary="<one-line summary of what landed>"
+scripts/handoff-sha.sh <id> land_head --push --remove-label ready-for-code-review --add-label ready-for-land --set-metadata land_summary="<one-line summary of what landed>"
 ```
 
 Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written; investigate
 `HEAD`), 2 = this CALL is broken, 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not at
 `HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; nothing is half-written on
-a nonzero exit.
-
-```bash
-scripts/bd-dolt-push.sh
-```
+a nonzero exit, except 6 = the write WAS done but `--push`'s publish failed (run
+`scripts/bd-dolt-push.sh` alone; never re-run the hand-off). `--push` runs `scripts/bd-dolt-push.sh`
+after the write, so no separate publish call follows (lode-fg7w7.5).
 
 The push publishes the label swap over `refs/dolt/data` — durable, cross-machine.
 
