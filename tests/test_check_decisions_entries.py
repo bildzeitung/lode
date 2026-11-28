@@ -45,9 +45,6 @@ def test_a_passing_supersedes_chain(entries: Path) -> None:
     _entry(entries, "bbbbb", supersedes="[aaaaa]", related="[aaaaa]", date="2026-02-01")
     _entry(entries, "ccccc", supersedes="[bbbbb]", date="2026-03-01")
     assert _gate.check_edges(entries) == []
-    loaded, _ = _gate.load_entries(entries)
-    assert _gate.chain_head(loaded, "aaaaa") == "ccccc"
-    assert _gate.chain_head(loaded, "ccccc") == "ccccc"
 
 
 @pytest.mark.parametrize(

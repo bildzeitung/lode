@@ -95,18 +95,6 @@ def successors(entries: dict[str, dict]) -> dict[str, list[str]]:
     return out
 
 
-def chain_head(entries: dict[str, dict], entry_id: str) -> str:
-    """Follow ``superseded_by`` from ``entry_id`` to an entry nothing supersedes. Stops
-    on a cycle; on a fork (which the gate fails) the newest by ``(date, id)`` wins."""
-    nxt, seen = successors(entries), {entry_id}
-    while entry_id in nxt:
-        entry_id = max(nxt[entry_id], key=lambda i: (entries[i]["date"], i))
-        if entry_id in seen:
-            break
-        seen.add(entry_id)
-    return entry_id
-
-
 def check_edges(directory: Path) -> list[str]:
     entries, problems = load_entries(directory)
     for entry in entries.values():
@@ -116,8 +104,7 @@ def check_edges(directory: Path) -> list[str]:
                 for t in entry[key]
                 if t not in entries
             ]
-    # A fork fails so that every chain stays linear and its head never rests on
-    # chain_head's tie-break.
+    # A fork fails so that every chain stays linear and has exactly one head.
     problems += [
         f"{entries[old]['path'].name}: superseded by {len(new)} entries"
         f" ({', '.join(new)}); only one may supersede it"
