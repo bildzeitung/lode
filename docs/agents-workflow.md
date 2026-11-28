@@ -2896,7 +2896,7 @@ rather than any new prevention mechanism:
   [decisions.md](decisions.md)), so nothing re-arms or notices that it's ready for a human to close.
 
 **`/sweep`** (skill: [`.claude/skills/sweep/SKILL.md`](../.claude/skills/sweep/SKILL.md)) is the
-fourth loop leg that closes this gap — **surface-only, lowest-privilege**: it makes **no** decision
+third loop leg that closes this gap — **surface-only, lowest-privilege**: it makes **no** decision
 and dispatches **no** builder, lander, or auditor. Each pass it collects every open `land-escalated`
 branch, every open `human`-labeled decision ticket, and every epic that is `epic-audited` + open +
 fully child-closed; dedups the set against a durable digest issue it owns (located by the reserved
@@ -2926,7 +2926,7 @@ Two further safeguards a `/challenge` pass considered for this unattended story 
 bounce-lineage cap and a `/code` rebase-attempt cap — were deliberately **deferred**, and an
 epic-auto-close mechanism was deliberately **rejected**; see [decisions.md](decisions.md) for the
 rationale and each one's revisit trigger. `/sweep` itself is the detector for the deferred caps: it
-would surface a stuck bounce or rebase lineage the moment one actually occurs, well before a cap
+would surface a stuck bounce or rebase lineage on its next pass after one occurs, well before a cap
 would trigger.
 
 **A `land-escalated` ticket that is also `deferred` (lode-o7ai, decided) — surfaced, notified once,

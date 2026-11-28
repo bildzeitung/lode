@@ -603,8 +603,8 @@ scripts/validate-mermaid.sh                          # parse every ```mermaid bl
 **Gates must be green before I hand off** — `fix` + the `tests` bucket's `unit` view above,
 regardless of whether the diff touches Python, shell, or docs; a docs/shell-only change still runs
 them (they cost little and stay the one green/red signal I hand off on). The everything-else
-bucket (`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) is deliberately NOT a builder-side gate
-— see the staged policy above; the reviewer runs it before the branch reaches `trunk`. Fix and
+bucket (`shellcheck`/`linkcheck`/`docstringcheck`/`decisions_entries`/`docs`) is deliberately NOT a
+builder-side gate — see the staged policy above; the reviewer runs it before the branch reaches `trunk`. Fix and
 re-run. (The reviewer re-gates after its fixes, but I hand off only a green branch on the buckets
 that are mine to run.)
 

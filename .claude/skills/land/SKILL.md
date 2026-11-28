@@ -1051,9 +1051,10 @@ already needs `uv` to run the gates at all; without one the session exits 127 or
 fault (below).
 
 **`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
-(`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each
-branch individually before the merge** — two independently-green branches that together break a
-doc anchor, a cross-file markdown link, or a shell lint would otherwise land red. `lock_currency`
+(`shellcheck`/`linkcheck`/`docstringcheck`/`decisions_entries`/`docs`) against the MERGED batch, not
+just against each branch individually
+before the merge** — two independently-green branches that together break a doc anchor, a
+cross-file markdown link, or a shell lint would otherwise land red. `lock_currency`
 stays a separate, explicit call: it needs network and is not part of the blessed-tag bucket scheme
 (full fiat: `docs/conventions.md`).
 
@@ -1158,7 +1159,8 @@ it would mask the 2. Keep it there.
   UNATTRIBUTED and I stop the pass, landing nothing** (lode-6ldh). As of lode-b9qy the replay's
   gate set matches the combined re-gate that sent me here — `nox -t fix` / `nox -s tests` /
   `nox -t everything-else` / `nox -s lock_currency` — so the specific gap this guard was written
-  for (a `shellcheck`/`linkcheck`/`docstringcheck`/`docs` regression reddening the combined re-gate
+  for (a `shellcheck`/`linkcheck`/`docstringcheck`/`decisions_entries`/`docs` regression reddening
+  the combined re-gate
   and then going unreproduced here) is closed. **The guard stays regardless**: an all-green replay
   under a red combined re-gate still means the red was not reproduced against any single branch —
   a nondeterministic test, an ordering effect only the full batch exhibits, or a gate set that has

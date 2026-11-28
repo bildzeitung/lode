@@ -541,7 +541,7 @@ to the rebase-pickup cycle's gate set in `.claude/skills/code/rebase-pickup.md`:
 uv run --frozen nox -t fix            # ruff format + lint (fixes in place)
 uv run --frozen nox -s tests          # the tests bucket's FULL view -- not `unit`, the builder's
                                        # fast subset; this is the last gate before trunk
-uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + docs
+uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + decisions_entries + docs
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
 

@@ -28,8 +28,8 @@
 # cap it now DENIES. That is the deliberate trade: a denied command is a cheap,
 # recoverable cost (append in smaller pieces, or surface it to a human to widen
 # the cap), while silently scanning for seconds on every Bash call is not, and
-# silently NOT scanning would be a false ALLOW. Whether 16 KiB is still the
-# right number now the premise is corrected is filed as its own follow-up.
+# silently NOT scanning would be a false ALLOW. Whether 16 KiB is the right number
+# was decided twice, both times keep 16 KiB (lode-qzg4, lode-mxo0h).
 # Full argument and the (a)/(b)/(c) options weighed: docs/agents-workflow.md.
 SHELL_QUOTE_SPLIT_MAX_LEN=16384
 #

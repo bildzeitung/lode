@@ -184,7 +184,7 @@ output in this turn.
 uv run --frozen nox -t fix            # ruff format + lint (fixes in place)
 uv run --frozen nox -s tests          # the tests bucket's FULL view (not `unit` -- this cycle
                                        # is the last gate before trunk, same bar as the reviewer)
-uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + docs
+uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + decisions_entries + docs
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
