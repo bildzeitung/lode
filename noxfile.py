@@ -33,9 +33,9 @@ ungated the way ``shellcheck`` did (lode-vvt1). Full fiat text: ``docs/conventio
                                      last gates before trunk (resolves lode-87v7's gap)
 
 A bare ``nox`` invocation runs all SEVEN sessions in ``nox.options.sessions`` below (``fix``,
-``tests``, ``shellcheck``, ``linkcheck``, ``docstringcheck``, ``decisions_entries``, ``docs``) -- that default set is
-unaffected by the bucket scheme above, which only governs how instruction-file gate PROSE
-invokes a subset of them.
+``tests``, ``shellcheck``, ``linkcheck``, ``docstringcheck``, ``decisions_entries``, ``docs``) --
+that default set is unaffected by the bucket scheme above, which only governs how
+instruction-file gate PROSE invokes a subset of them.
 
 Plus FIVE opt-in sessions that are **not** in the default set, and (aside from ``unit``, folded
 into the ``tests`` bucket above) NOT part of the ``tests``/``everything-else`` bucket scheme --
@@ -351,8 +351,8 @@ def decisions_entries(session: nox.Session) -> None:
     """Validate the per-entry decision files under ``docs/decisions/`` (lode-ebayj.2).
 
     Duplicate ids, id/filename mismatches, dangling or cyclic edges, and any
-    edit or deletion of an entry already committed on ``origin/trunk``; see
-    ``scripts/check_decisions_entries.py``. Resolves ``python`` through
+    edit or deletion of an entry that exists where ``HEAD`` forked from
+    ``origin/trunk``; see ``scripts/check_decisions_entries.py``. Resolves ``python`` through
     ``_venv_tool`` (lode-0yfn) for the project's ``typer``.
     """
     session.run(_venv_tool(session, "python"), "scripts/check_decisions_entries.py")

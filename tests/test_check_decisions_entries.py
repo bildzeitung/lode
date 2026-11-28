@@ -71,6 +71,19 @@ def test_dangling_edge_is_flagged(entries: Path, key: str) -> None:
     assert any("nopqr does not exist" in p for p in _gate.check_edges(entries))
 
 
+@pytest.mark.parametrize("value", ["", "aaaaa", "[aaaaa]  # ids only"])
+def test_an_edge_value_that_is_not_an_inline_list_is_flagged(
+    entries: Path, value: str
+) -> None:
+    """A blank value is how a YAML block list reads to the gate's line parser,
+    so passing it would drop that list's edges without a word."""
+    _entry(entries, "aaaaa")
+    _entry(entries, "bbbbb", supersedes=value)
+    assert _gate.check_edges(entries) == [
+        "bbbbb-x.md: supersedes must be an inline [id, ...] list"
+    ]
+
+
 def test_supersedes_cycle_is_flagged(entries: Path) -> None:
     _entry(entries, "aaaaa", supersedes="[bbbbb]")
     _entry(entries, "bbbbb", supersedes="[aaaaa]")
@@ -114,6 +127,42 @@ def test_adding_an_entry_passes_the_immutability_check(tmp_path: Path) -> None:
     assert _gate.check_immutable(directory, "HEAD~1") == []
 
 
+def test_an_entry_the_base_gained_after_the_fork_is_not_a_deletion(
+    tmp_path: Path,
+) -> None:
+    """A branch under review is routinely behind the base ref. The entries the
+    base gained since the fork are absent from the branch, not deleted by it;
+    the branch's own edit of an entry it forked with is still caught."""
+    repo, directory = _repo_with_committed_entry(tmp_path)
+    _git(repo, "branch", "feature")
+    _commit_file(
+        repo,
+        str(Path("docs", "decisions", "bbbbb-y.md")),
+        "---\nid: bbbbb\n---\n",
+        "trunk gains an entry",
+    )
+    _git(repo, "checkout", "-q", "feature")
+    assert _gate.check_immutable(directory, "trunk") == []
+    _entry(directory, "aaaaa", body="rewritten")
+    assert _gate.check_immutable(directory, "trunk") == [
+        "aaaaa-x.md: committed entry was modified"
+    ]
+
+
+def test_editing_a_committed_entry_with_a_non_ascii_slug_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """git quotes such a path in its default diff output, ``.md`` included."""
+    repo, directory = _repo_with_committed_entry(tmp_path)
+    path = _entry(directory, "bbbbb", slug="café")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "add")
+    path.write_text(path.read_text() + "more\n")
+    assert _gate.check_immutable(directory, "HEAD") == [
+        "bbbbb-café.md: committed entry was modified"
+    ]
+
+
 def test_cli_exit_codes(tmp_path: Path) -> None:
     _, directory = _repo_with_committed_entry(tmp_path)
     ok = runner.invoke(_gate_app(), ["--directory", str(directory), "--base", "HEAD"])
@@ -121,10 +170,12 @@ def test_cli_exit_codes(tmp_path: Path) -> None:
     _entry(directory, "aaaaa", body="rewritten")
     bad = runner.invoke(_gate_app(), ["--directory", str(directory), "--base", "HEAD"])
     assert bad.exit_code == 1
+    _entry(directory, "bbbbb", related="[nopqr]")
     nobase = runner.invoke(
         _gate_app(), ["--directory", str(directory), "--base", "no-such-ref"]
     )
     assert nobase.exit_code == 2
+    assert "nopqr does not exist" in nobase.output
 
 
 def _gate_app():

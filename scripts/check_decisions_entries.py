@@ -1,10 +1,11 @@
 """Edge gate for the per-entry decision files under ``docs/decisions/`` (lode-ebayj.2).
 
 Fails (exit 1) on: a duplicate id, an id/filename mismatch, a ``supersedes`` or
-``related`` target that does not exist, a ``supersedes`` cycle, and any
-modification or deletion of an entry file that exists at the base ref. Exit 2
-means the gate could not run (a base ref that does not resolve) and is never a
-verdict on the entries. The format is defined in ``docs/decisions/README.md``.
+``related`` value that is not an inline list or names a target that does not
+exist, a ``supersedes`` cycle, and any modification or deletion of an entry
+file that exists where ``HEAD`` forked from the base ref. Exit 2 means the gate
+could not run (no merge base with the base ref) and is never a verdict on the
+entries. The format is defined in ``docs/decisions/README.md``.
 
 :func:`chain_head` is shared with ``docs_index_query.py``, which loads this
 module as a sibling to name the head of a superseded hit's chain.
@@ -46,14 +47,10 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]]:
     return meta
 
 
-def _ids(meta: dict[str, str | list[str]], key: str) -> list[str]:
-    value = meta.get(key, [])
-    return value if isinstance(value, list) else [value]
-
-
 def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
     """``{id: {"path", "date", "supersedes", "related"}}`` plus the problems
-    found while loading (filename mismatch, duplicate id)."""
+    found while loading (filename mismatch, duplicate id, an edge value that
+    is not an inline list)."""
     entries: dict[str, dict] = {}
     problems: list[str] = []
     for path in sorted(directory.glob("*.md")):
@@ -68,12 +65,15 @@ def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
         if entry_id in entries:
             problems.append(f"{path.name}: duplicate id {entry_id}")
             continue
-        entries[entry_id] = {
-            "path": path,
-            "date": str(meta.get("date", "")),
-            "supersedes": _ids(meta, "supersedes"),
-            "related": _ids(meta, "related"),
-        }
+        entries[entry_id] = {"path": path, "date": str(meta.get("date", ""))}
+        for key in ("supersedes", "related"):
+            value = meta.get(key, [])
+            if not isinstance(value, list):
+                # A blank value can be a YAML block list this parser does not
+                # read: failing here keeps its edges from being dropped unseen.
+                problems.append(f"{path.name}: {key} must be an inline [id, ...] list")
+                value = []
+            entries[entry_id][key] = value
     return entries, problems
 
 
@@ -129,25 +129,30 @@ def check_edges(directory: Path) -> list[str]:
 
 
 def check_immutable(directory: Path, base: str) -> list[str]:
-    """Entry files that exist at ``base`` must be byte-identical at the worktree."""
+    """Entry files that exist where ``HEAD`` forked from ``base`` must be
+    byte-identical in the worktree.
+
+    The merge base, not ``base``'s tip: a branch that is behind ``base`` lacks
+    the entries ``base`` has gained since, and each would read as deleted.
+    """
     git = ["git", "-C", str(directory)]
-    if subprocess.run(
-        [*git, "rev-parse", "--verify", base], capture_output=True, check=False
-    ).returncode:
+    fork = subprocess.run(
+        [*git, "merge-base", base, "HEAD"], capture_output=True, text=True, check=False
+    )
+    if fork.returncode:
         print(
-            f"GATE COULD NOT RUN: base ref {base!r} does not resolve", file=sys.stderr
+            f"GATE COULD NOT RUN: no merge base of {base!r} and HEAD", file=sys.stderr
         )
         raise typer.Exit(2)
-    diff = subprocess.run(
-        [*git, "diff", "--name-status", "--no-renames", base, "--", "."],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    rows = [row.split("\t") for row in diff.splitlines()]
+    # ``-z``: without it git quotes a non-ASCII path, which would then fail
+    # the ``.md`` test below and go unchecked.
+    diff = [*git, "diff", "-z", "--name-status", "--no-renames", fork.stdout.strip()]
+    fields = subprocess.run(
+        [*diff, "--", "."], capture_output=True, text=True, check=True
+    ).stdout.split("\0")
     return [
         f"{Path(f).name}: committed entry was {'deleted' if s == 'D' else 'modified'}"
-        for s, f in rows
+        for s, f in zip(fields[::2], fields[1::2])
         if s != "A" and f.endswith(".md") and Path(f).name != "README.md"
     ]
 
@@ -155,16 +160,18 @@ def check_immutable(directory: Path, base: str) -> list[str]:
 def main(
     directory: Annotated[Path, typer.Option(help="Entry directory.")] = DEFAULT_DIR,
     base: Annotated[
-        str, typer.Option(help="Ref whose entries are frozen.")
+        str, typer.Option(help="Ref HEAD forked from; entries at the fork are frozen.")
     ] = "origin/trunk",
 ) -> None:
     """Check the decision entries' edges and that committed entries are unchanged."""
-    problems: list[str] = []
-    if directory.is_dir():
-        problems = check_edges(directory) + check_immutable(directory, base)
-    for problem in problems:
-        print(problem)
-    raise typer.Exit(1 if problems else 0)
+    if not directory.is_dir():
+        raise typer.Exit(0)
+    edges = check_edges(directory)
+    # Printed before the immutability check runs: its exit 2 must not discard them.
+    print(*edges, sep="\n", end="\n" if edges else "")
+    frozen = check_immutable(directory, base)
+    print(*frozen, sep="\n", end="\n" if frozen else "")
+    raise typer.Exit(1 if edges or frozen else 0)
 
 
 if __name__ == "__main__":

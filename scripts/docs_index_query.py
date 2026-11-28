@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -314,11 +315,11 @@ def zero_hit_id_note(raw_query: str) -> str | None:
     bd_id = raw_query.strip()
     if not _BD_ID.fullmatch(bd_id):
         return None
-    # ``-w`` and the top-level ``*.md`` pathspec hold this probe to what the
-    # index matches: a whole id, in the files it chunks.
-    pathspec = ":(glob)docs/*.md"
+    # ``-w`` and the two non-recursive pathspecs hold this probe to what the
+    # index matches: a whole id, in the files ``chunk_corpus`` chunks.
+    pathspecs = [":(glob)docs/*.md", ":(glob)docs/decisions/*.md"]
     grep = _run(
-        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", pathspec]
+        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", *pathspecs]
     )
     # Exit 1 is "no match"; any other failure (128: no such ref) says nothing
     # about trunk's docs, so the bd answer below would claim too much.
@@ -331,7 +332,7 @@ def zero_hit_id_note(raw_query: str) -> str | None:
         return (
             f"{bd_id} has a docs entry on {_TRUNK_REF} ({files}) that this "
             f"checkout predates; find its lines with "
-            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- '{pathspec}'`."
+            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- {shlex.join(pathspecs)}`."
         )
     # ``--readonly``: a lookup must never write bd state, and a bd killed at
     # the timeout must not be mid-write.

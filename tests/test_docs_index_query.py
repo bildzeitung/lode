@@ -798,6 +798,8 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
     _commit_file(repo, "docs/design.md", "See lode-zzzzzq and (lode-yyyyy.2).\n", "a")
     _commit_file(repo, "docs/data.csv", "lode-zzzzz\n", "csv")
     _commit_file(repo, "docs/how-to/README.md", "lode-zzzzz\n", "nested")
+    entry = Path("docs", "decisions", "aaaaa-x.md").as_posix()
+    _commit_file(repo, entry, "lode-xxxxx\n", "entry")
     _git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     monkeypatch.setattr(_query_module._build, "REPO_ROOT", repo)
     real_run = _query_module._run
@@ -813,6 +815,8 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
     assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-zzzzzq")
     # The index matches a parent id inside a child's, and so does the probe.
     assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-yyyyy")
+    # The index chunks the per-entry decision files too.
+    assert f"origin/trunk ({entry})" in _zero_hit_id_note("lode-xxxxx")
 
 
 def test_run_returns_none_when_the_subprocess_hangs(
