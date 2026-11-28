@@ -25,6 +25,13 @@ comparison against direct grep/read access, because a producer that greps
 only instrument that can measure that comparison, at the cost of parsing an
 externally-defined transcript format this repo does not own.
 
+It also prints the POINTER-FOLLOW RATE (``lode-fg7w7.2``): of the index calls
+that cited a range, how many were followed by a read of a cited range within
+the next few tool-call positions, overall and for queries naming no bd id
+(:func:`scan_follow`). What counts as a follow is a maintainer ruling,
+recorded with the measured rates under the ``lode-2e6x`` entry of
+docs/decisions.md.
+
 TRANSCRIPT-ENCODING CAVEATS (hit while writing this):
 
 - A ``tool_result`` (and occasionally ``tool_use.input``) is not reliably
@@ -654,8 +661,10 @@ def _tool_reads(tool_name: str, tool_input: dict[str, Any]) -> list[tuple[str, _
         has_offset = isinstance(offset, int) and offset > 0
         lo = offset if has_offset else 1
         if isinstance(limit, int) and limit > 0:
-            return [(rel, (lo, lo + limit - 1))]
-        return [(rel, (lo, lo + _READ_DEFAULT_LIMIT - 1 if has_offset else math.inf))]
+            span: int | float = limit
+        else:
+            span = _READ_DEFAULT_LIMIT if has_offset else math.inf
+        return [(rel, (lo, lo + span - 1))]
     command = str(tool_input.get("command", "")) if tool_name == "Bash" else ""
     if not _mentions_docs_md(command):
         return []
@@ -663,7 +672,7 @@ def _tool_reads(tool_name: str, tool_input: dict[str, Any]) -> list[tuple[str, _
     shown: list[str] = []
     for seg in _split_segments(command):
         piped, shown = shown, []
-        if _is_write_form(seg):
+        if _is_write_form(seg) or not (piped or _mentions_docs_md(seg)):
             continue
         tokens = _segment_tokens(seg)
         name = _segment_command_name(seg)
@@ -758,12 +767,15 @@ def scan_follow(
     before: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """One row per docs-index call: ``{id, timestamp, idless, status,
-    whole_file_only}``.
+    whole_file_only}``. The report prints neither ``id`` nor ``timestamp``:
+    ``timestamp`` is what ``before`` filters on, and ``id`` (the ``tool_use``
+    id) is the key a hand-read sample of the rows is drawn and looked up by.
 
     ``status`` is ``"followed"`` when one of the next ``window`` tool-call
     positions in the same transcript (:data:`DEFAULT_FOLLOW_WINDOW`) reads a
     range overlapping a cited one (:func:`_cited_ranges`, parsed from the
-    call's recorded result, never re-queried), ``"not-followed"`` when none does, ``"zero-hit"`` when the index answered
+    call's recorded result, never re-queried), ``"not-followed"`` when none
+    does, ``"zero-hit"`` when the index answered
     ``No results.``, ``"uncited"`` when the result cites nothing for any other
     reason (the command failed, printed ``--help``, or had its output filtered
     away), ``"no-result"`` when the transcript holds no result for the call.
@@ -776,13 +788,13 @@ def scan_follow(
     one whose time no transcript records.
     """
     rows: dict[str, dict[str, Any]] = {}
+    stamps: dict[str, datetime] = {}
     transcripts = sorted(p for d in projects_dirs for p in d.rglob("*.jsonl"))
     for transcript_path in transcripts:
         positions: list[list[tuple[str, _Range]]] = []
         turn_position: dict[str, int] = {}
         last_entry: dict[str, Any] | None = None
         index_calls: dict[str, tuple[int, bool]] = {}
-        stamps: dict[str, datetime] = {}
         results: dict[str, str] = {}
         seen: set[str] = set()
         for entry, block in _iter_blocks(transcript_path, "tool_use", "tool_result"):
@@ -818,7 +830,7 @@ def scan_follow(
                     index_calls[tid] = (pos, not _is_id_query(command))
                 positions[pos].extend(_tool_reads(name, tool_input))
             # Outside the first-sighting branch: the line that first shows a
-            # call can be the one without a timestamp.
+            # call, or the whole first copy of it, can lack a timestamp.
             if tid in index_calls and tid not in stamps and (at := _timestamp(entry)):
                 stamps[tid] = at
         for tid, (pos, idless) in index_calls.items():
@@ -826,17 +838,15 @@ def scan_follow(
                 results.get(tid), positions[pos + 1 : pos + 1 + window]
             )
             held = rows.get(tid)
-            row = {
-                "id": tid,
-                "timestamp": stamps.get(tid) or (held and held["timestamp"]),
-                "idless": idless,
-                "status": status,
-                "whole_file_only": whole_file_only,
-            }
             if held is None or _STATUS_RANK[status] > _STATUS_RANK[held["status"]]:
-                rows[tid] = row
-            elif held["timestamp"] is None:
-                held["timestamp"] = row["timestamp"]
+                rows[tid] = {
+                    "id": tid,
+                    "idless": idless,
+                    "status": status,
+                    "whole_file_only": whole_file_only,
+                }
+    for tid, row in rows.items():
+        row["timestamp"] = stamps.get(tid)
     if before is None:
         return list(rows.values())
     return [r for r in rows.values() if r["timestamp"] and r["timestamp"] < before]
@@ -892,7 +902,8 @@ def _print_split(label: str, split: dict[str, dict[str, int]]) -> None:
         "docs/*.md, split by main session vs subagent, per day.\n\nRun this "
         "to reproduce the retrospective comparison the docs-index log alone "
         "cannot show, since a hand grep of docs/*.md never touches the "
-        "index. Reads ~/.claude/projects; writes nothing there.\n\nScoped to "
+        "index. Also prints how often an index call's cited range is read "
+        "next. Reads ~/.claude/projects; writes nothing there.\n\nScoped to "
         "the current project's transcripts by default; pass --all-projects "
         "to widen to every project on the machine."
     )

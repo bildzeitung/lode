@@ -712,9 +712,13 @@ def _result(tid: str, text: str) -> dict:
     }
 
 
-def _index_call(tid: str, query: str, result: str) -> list[dict]:
+def _index_use(tid: str, query: str) -> dict:
     command = f'uv run --frozen python scripts/docs_index_query.py "{query}"'
-    return [_use(tid, "Bash", {"command": command}), _result(tid, result)]
+    return _use(tid, "Bash", {"command": command})
+
+
+def _index_call(tid: str, query: str, result: str) -> list[dict]:
+    return [_index_use(tid, query), _result(tid, result)]
 
 
 _CITES = (
@@ -880,21 +884,19 @@ def test_follow_counts_parallel_calls_in_one_turn_as_one_position(
     blob = _use("b1", "Bash", ls)
     blob["message"]["content"] += _use("b2", "Bash", ls)["message"]["content"]
     entries = [
-        _in_turn("t0", _index_call("i1", "own turn", _CITES)[0]),
+        _in_turn("t0", _index_use("i1", "own turn")),
         _in_turn("t0", _use("r0", "Bash", sed)),
         _result("i1", _CITES),
         *(_in_turn("t1", _use(f"p{n}", "Bash", ls)) for n in range(4)),
         blob,
-        _in_turn("t2", _index_call("i2", "third position", _CITES)[0]),
+        _in_turn("t2", _index_use("i2", "third position")),
         _result("i2", _CITES),
         *(_in_turn("t3", _use(f"q{n}", "Bash", ls)) for n in range(4)),
         _in_turn("t4", _use("r1", "Bash", sed)),
     ]
-    _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
 
     def statuses(window: int) -> list[str]:
-        rows = _report_module.scan_follow(tmp_path, window=window)
-        return [r["status"] for r in rows]
+        return [r["status"] for r in _follow_rows(tmp_path, entries, window=window)]
 
     assert statuses(1) == ["not-followed", "not-followed"]
     assert statuses(2) == ["not-followed", "followed"]
@@ -952,11 +954,12 @@ def _at(timestamp: str, entry: dict) -> dict:
 
 
 def test_follow_before_leaves_out_later_and_undated_calls(tmp_path: Path) -> None:
-    undated_copy = _index_call("i1", "early", _CITES)
+    """The first call's time comes from a later line than the one that first
+    shows it; the second is made at the cutoff; the third has no time."""
     entries = [
-        *undated_copy,
-        _at("2026-11-27T10:00:00.000Z", _index_call("i1", "early", _CITES)[0]),
-        _at("2026-11-27T12:00:00.000Z", _index_call("i2", "at the cutoff", _CITES)[0]),
+        *_index_call("i1", "early", _CITES),
+        _at("2026-11-27T10:00:00.000Z", _index_use("i1", "early")),
+        _at("2026-11-27T12:00:00.000Z", _index_use("i2", "at the cutoff")),
         _result("i2", _CITES),
         *_index_call("i3", "no time recorded", _CITES),
     ]
