@@ -105,7 +105,12 @@ def test_deleting_a_committed_entry_is_flagged(tmp_path: Path) -> None:
 
 def test_adding_an_entry_passes_the_immutability_check(tmp_path: Path) -> None:
     repo, directory = _repo_with_committed_entry(tmp_path)
-    _commit_file(repo, "docs/decisions/bbbbb-y.md", "---\nid: bbbbb\n---\n", "add")
+    _commit_file(
+        repo,
+        str(Path("docs", "decisions", "bbbbb-y.md")),
+        "---\nid: bbbbb\n---\n",
+        "add",
+    )
     assert _gate.check_immutable(directory, "HEAD~1") == []
 
 

@@ -95,7 +95,7 @@ def test_real_corpus_covers_every_docs_file():
 
 def test_a_decision_entry_file_is_one_unit_despite_its_headings():
     text = "---\nid: aaaaa\n---\n# One\n\ntext\n\n## Two\n\nmore\n"
-    assert len(chunk_file("docs/decisions/aaaaa-x.md", text)) == 1
+    assert len(chunk_file("fixture/decisions/aaaaa-x.md", text)) == 1
 
 
 def test_a_future_large_section_still_fails_the_invariant_if_unchunked():
