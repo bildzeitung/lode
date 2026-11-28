@@ -57,6 +57,8 @@ from rich.style import Style
 from textual.widgets import TextArea
 from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
 
+from lode.tui.widgets.lint_text_area import LintTextArea
+
 #: Semantic declaration of the note-body markdown palette (lode-lab1,
 #: retuned lode-dmbc), kept as a plain module-level dict -- same convention as
 #: ``CLI_STYLES`` in ``lode.cli`` -- so a test can assert OUR palette rather
@@ -127,6 +129,7 @@ def _markdown_text_area(
     read_only: bool = False,
     placeholder: str = "",
     theme: TextAreaTheme = NOTE_BODY_THEME,
+    lint: bool = False,
 ) -> TextArea:
     """A note-body ``TextArea`` with markdown colouring, or plain text if unavailable.
 
@@ -147,9 +150,14 @@ def _markdown_text_area(
             instead, so a ``[tui.theme.syntax]`` config override (lode-cwyk)
             reaches every note-body screen; the default keeps this function
             usable standalone (tests, scripts) with no app required.
+        lint: Build a :class:`~lode.tui.widgets.lint_text_area.LintTextArea`
+            (markdown lint underlines) instead of a plain ``TextArea``, on the
+            grammar path and the grammar-less fallback alike. Only the two
+            editable bodies pass ``True``; the read-only viewers do not.
     """
+    area_cls = LintTextArea if lint else TextArea
     try:
-        text_area = TextArea(
+        text_area = area_cls(
             text,
             language="markdown",
             read_only=read_only,
@@ -160,7 +168,7 @@ def _markdown_text_area(
         # Both arms mean "no usable markdown grammar in this environment" --
         # see this module's docstring for why ValueError is required here and
         # why it is narrow enough not to mask a real bug.
-        return TextArea(text, read_only=read_only, id=id, placeholder=placeholder)
+        return area_cls(text, read_only=read_only, id=id, placeholder=placeholder)
 
     # Deliberately OUTSIDE the try: the ``except`` above is scoped to
     # ``TextArea.__init__``'s two documented grammar failures and nothing else.

@@ -204,6 +204,7 @@ class CaptureScreen(Screen[None]):
                 id=BODY_ID,
                 placeholder="What did you learn today?",
                 theme=self.app.note_body_theme,
+                lint=True,
             ),
             # exclude_note_id=None: a brand-new capture has no note id yet to
             # exclude -- see lode.tui.widgets.related_notes_panel's module docstring.

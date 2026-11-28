@@ -186,10 +186,11 @@ items parked in editing.md") links to it and cannot be repointed. -->
 ## Inline lint squiggles — get_line underlines (see `lode-o7pf`)
 
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
-**editable** note bodies, updated as you type. **This section is the settled design, only partly
-shipped:** the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`) and the widget
-(`LintTextArea` in `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) are built, but the
-wiring (`lode-o7pf.4`) is not, so no screen draws an underline yet. The
+**editable** note bodies, updated as you type. **This section is the settled design, shipped:**
+the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`), the widget (`LintTextArea` in
+`src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) and the wiring (`lode-o7pf.4`:
+`_markdown_text_area(lint=True)`, passed by `EditScreen` and `CaptureScreen` only, on the grammar
+path and the grammar-less fallback) are built. The
 Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design

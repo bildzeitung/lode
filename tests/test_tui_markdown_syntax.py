@@ -41,6 +41,7 @@ from lode.tui.screens.snapshot_viewer import (
     SnapshotViewerScreen,
 )
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
+from lode.tui.widgets.lint_text_area import LintTextArea
 from lode.versions import save
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -449,3 +450,56 @@ def test_highlights_cover_the_agreed_stock_token_set() -> None:
             f"tree-sitter-markdown bump changed this, re-derive _EXPECTED_HIGHLIGHTS "
             f"rather than assuming a lode regression."
         )
+
+
+# ---------------------------------------------------------------------------
+# lode-o7pf.4: only the two editable bodies lint.
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_text_area_lint_flag_picks_the_widget_class() -> None:
+    assert type(_markdown_text_area(id="a")) is TextArea
+    assert type(_markdown_text_area(id="a", lint=True)) is LintTextArea
+
+
+def test_markdown_text_area_lint_survives_the_grammar_less_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
+    plain = _markdown_text_area("x", id="a")
+    linted = _markdown_text_area("x", id="a", lint=True)
+
+    assert linted.language is None
+    assert type(plain) is TextArea
+    assert isinstance(linted, LintTextArea)
+
+
+def test_editable_bodies_lint_and_viewers_do_not(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        version_id = save(conn, "note-a", "# h  \n\n#bad").version_id
+        _insert_snapshot(conn, snapshot_id="snap-1", body="a snapshot")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[bool]:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, CaptureScreen)
+            out = [
+                isinstance(app.screen.query_one(f"#{BODY_ID}", TextArea), LintTextArea)
+            ]
+            for screen, wid in (
+                (EditScreen("note-a"), EDIT_BODY_ID),
+                (VersionViewScreen("note-a", version_id), VERSION_BODY_ID),
+                (SnapshotViewerScreen("snap-1"), SNAPSHOT_VIEWER_BODY_ID),
+            ):
+                app.push_screen(screen)
+                await pilot.pause()
+                body = app.screen.query_one(f"#{wid}", TextArea)
+                out.append(isinstance(body, LintTextArea))
+            return out
+
+    assert asyncio.run(_drive()) == [True, True, False, False]
