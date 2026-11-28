@@ -1,0 +1,620 @@
+"""Dry-run migration of ``docs/decisions.md`` into one file per entry (lode-ebayj.3).
+
+Splits the single-file log into ``docs/decisions/<id>-<slug>.md`` entry files
+(format: ``docs/decisions/README.md``) in a TARGET directory given on the
+command line. It reads the source and writes only the target, the mapping file
+and its report on stdout; the cutover ticket (lode-ebayj.4) is what puts the
+result into ``docs/``. The target must not exist or must be empty, so a run can
+never overwrite ``docs/decisions/``.
+
+An entry is a column-zero ``- **`` bullet or a ``## `` section outside a code
+fence; it runs to the next entry. Everything before the first entry (the
+preamble, superseded by the directory README) is not migrated. An entry's body
+is its source lines VERBATIM, trailing blank lines included, so the bodies
+concatenated in source order are the source minus the preamble, byte for byte.
+The only edits are the reviewed :data:`OVERRIDES`: a marker block moved to the
+entry it corrects, or dropped as obsolete. :func:`verify` re-reads the written
+files and checks that, so a run that prints ``VERIFY: ok`` has proved the
+counts and the bytes.
+
+Frontmatter, derived mechanically (the report lists every guess):
+
+- ``id``: random, 5 lowercase base36 characters, unique within the run
+  (``--seed`` makes a run repeatable).
+- ``date``: the first ISO date in the entry's title, else in its first
+  paragraph, else anywhere in the entry, else the nearest dated entry's date.
+- ``status``: ``decided`` or ``open`` from the title's wording; an Update
+  marker that reads as a ruling turns an open entry decided. Both kinds of
+  wording in one title, or an open title with Updates none of which reads as a
+  ruling, is UNCLEAR: it gets ``open`` and is listed.
+- ``supersedes`` and ``related`` are empty: the migration invents no edges.
+
+Also written: a mapping file (JSON) from every old heading anchor and every
+bullet title to the new file, for the link rewiring in lode-ebayj.4.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import re
+import secrets
+from dataclasses import dataclass, field
+from itertools import pairwise
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from lode.docs_slug import github_slug
+from lode.fence_parsing import fence_flags
+
+app = typer.Typer(add_completion=False)
+
+_ENTRY_START_RE = re.compile(r"^(- \*\*|## )")
+_MARKER_RE = re.compile(r"\*\*Update \(")
+_MARKER_LINE_RE = re.compile(r"^\s*(?:- )?\*\*Update \(")
+_MARKER_ID_RE = re.compile(r"\*\*Update \(`?(lode-[\w.]*\w)")
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
+_ID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
+_SLUG_MAX = 60
+
+# Status wording. A ruling marker is looked for in the 250 characters after an
+# Update's lead-in; deferred is deliberately in neither set (a decision to defer
+# is a decision).
+_OPEN_RE = re.compile(
+    r"\b(open|leaning|undecided|unsettled|left open)\b", re.IGNORECASE
+)
+_DECIDED_RE = re.compile(
+    r"\b(decided|decision|decisions|settled|accepted|ruled|ruling|resolved|built|"
+    r"landed|done|rejected|withdrawn|fixed|closed|chosen|verified|approved)\b",
+    re.IGNORECASE,
+)
+_RULING_RE = re.compile(
+    r"\b(decided|settled|ruled|approved|resolved|accepted|built|landed|fixed|closed)\b",
+    re.IGNORECASE,
+)
+
+# Suspect heuristics for a marker that may sit under the wrong entry.
+_MISFILED_RE = re.compile(
+    r"does not belong|belongs (?:to|under|in)\b|misfiled|by mistake|wrong (?:entry|section)",
+    re.IGNORECASE,
+)
+_POINTS_ELSEWHERE_RE = re.compile(
+    r"(?:entry|section) (?:above|below|at the end of this file|elsewhere)",
+    re.IGNORECASE,
+)
+_NAMED_ENTRY_RE = re.compile(r"`?(lode-[\w.]*\w)`? (?:entry|section)")
+
+
+@dataclass(frozen=True)
+class Override:
+    """A reviewed correction to where one marker block lives.
+
+    ``source`` names an entry by a bd id found in exactly one entry's title;
+    ``marker`` is the exact opening text of the one marker block in that entry
+    to act on. A block runs from its marker line to the next blank line or the
+    next marker line.
+    """
+
+    action: str  # "move" or "drop"
+    source: str
+    marker: str
+    reason: str
+    target: str | None = None  # "move" only: an entry key like ``source``
+
+
+# The lode-d3snk Update was appended under the lode-fg7w7.3 section by mistake;
+# it corrects the lode-yt7q2 entry just before it. A column-zero bullet inside
+# a ``## `` section is an entry of its own, so the unit it corrects is the last
+# of that section, the "Still missed" bullet (lode-k813a), which is also where
+# one lode-htkr3 pointer sits. Both pointers only say the d3snk Update is
+# misfiled and are obsolete once it is moved. The third lode-htkr3 Update
+# (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
+OVERRIDES: tuple[Override, ...] = (
+    Override(
+        "move",
+        "lode-fg7w7.3",
+        "**Update (lode-d3snk, 2026-11-27):**",
+        "answers the 'Still missed' bullet of the lode-yt7q2 entry, per the "
+        "lode-htkr3 pointer",
+        target="lode-k813a",
+    ),
+    Override(
+        "drop",
+        "lode-k813a",
+        "**Update (lode-htkr3, 2026-11-27):**",
+        "pointer to the misfiled lode-d3snk Update, obsolete once it is moved",
+    ),
+    Override(
+        "drop",
+        "lode-fg7w7.3",
+        "**Update (lode-htkr3, 2026-11-27):**",
+        "pointer saying the lode-d3snk Update above does not belong here, "
+        "obsolete once it is moved",
+    ),
+)
+
+
+@dataclass
+class Entry:
+    kind: str  # "bullet" or "section"
+    start_line: int  # 1-based line in the source
+    title: str
+    lines: list[str]
+    date: str = ""
+    date_source: str = ""
+    status: str = "decided"
+    status_unclear: str = ""
+    entry_id: str = ""
+    filename: str = ""
+
+
+@dataclass
+class Applied:
+    override: Override
+    source_entry: Entry
+    target_entry: Entry | None
+    text: str
+
+
+@dataclass
+class Result:
+    preamble_lines: int
+    entries: list[Entry]
+    applied: list[Applied] = field(default_factory=list)
+    suspects: list[str] = field(default_factory=list)
+    mapping: list[dict] = field(default_factory=list)
+    source_body: str = ""
+
+
+def _title(kind: str, lines: list[str]) -> str:
+    if kind == "section":
+        return lines[0][3:].strip()
+    joined = "".join(lines[:6])[len("- **") :]
+    end = joined.find("**")
+    return " ".join((joined[:end] if end != -1 else lines[0][4:]).split())
+
+
+def split_entries(text: str) -> tuple[int, list[Entry]]:
+    """``(preamble line count, entries)`` for a decisions.md text."""
+    lines = text.splitlines(keepends=True)
+    inside = fence_flags(lines)
+    starts = [
+        i
+        for i, line in enumerate(lines)
+        if not inside[i] and _ENTRY_START_RE.match(line)
+    ]
+    if not starts:
+        return len(lines), []
+    bounds = [*starts, len(lines)]
+    entries = []
+    for lo, hi in pairwise(bounds):
+        kind = "section" if lines[lo].startswith("## ") else "bullet"
+        entries.append(Entry(kind, lo + 1, _title(kind, lines[lo:hi]), lines[lo:hi]))
+    return starts[0], entries
+
+
+def _key_pattern(key: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w-]){re.escape(key)}(?![\w-]|\.\w)")
+
+
+def find_entry(entries: list[Entry], key: str) -> Entry:
+    pattern = _key_pattern(key)
+    hits = [e for e in entries if pattern.search(e.title)]
+    if len(hits) != 1:
+        raise ValueError(f"override key {key!r} matches {len(hits)} entry titles")
+    return hits[0]
+
+
+def _find_block(entry: Entry, marker: str) -> tuple[int, int]:
+    hits = [
+        i
+        for i, line in enumerate(entry.lines)
+        if line.lstrip().removeprefix("- ").startswith(marker)
+    ]
+    if len(hits) != 1:
+        raise ValueError(
+            f"override marker {marker!r} matches {len(hits)} lines in {entry.title!r}"
+        )
+    lo = hits[0]
+    hi = lo + 1
+    while (
+        hi < len(entry.lines)
+        and entry.lines[hi].strip()
+        and not _MARKER_LINE_RE.match(entry.lines[hi])
+    ):
+        hi += 1
+    return lo, hi
+
+
+def apply_overrides(
+    entries: list[Entry], overrides: tuple[Override, ...]
+) -> list[Applied]:
+    """Move or drop each override's block. Every block is located against the
+    original lines first, so one override cannot shift another's."""
+    located = []
+    for ov in overrides:
+        source = find_entry(entries, ov.source)
+        lo, hi = _find_block(source, ov.marker)
+        target = find_entry(entries, ov.target) if ov.target else None
+        located.append((ov, source, lo, hi, target))
+    applied = [
+        Applied(ov, source, target, "".join(source.lines[lo:hi]))
+        for ov, source, lo, hi, target in located
+    ]
+    removals = sorted(
+        ((id(source), lo, hi, source) for _, source, lo, hi, _ in located),
+        key=lambda r: (r[0], -r[1]),
+    )
+    for _, lo, hi, source in removals:
+        del source.lines[lo:hi]
+    for item in applied:
+        if item.target_entry is not None:
+            lines = item.target_entry.lines
+            at = len(lines)
+            while at and not lines[at - 1].strip():
+                at -= 1
+            lines[at:at] = item.text.splitlines(keepends=True)
+    return applied
+
+
+def _first_paragraph(entry: Entry) -> str:
+    out = []
+    for line in entry.lines:
+        if not line.strip():
+            break
+        out.append(line)
+    return "".join(out)
+
+
+def derive_date(entry: Entry) -> None:
+    for source, text in (
+        ("title", entry.title),
+        ("first paragraph", _first_paragraph(entry)),
+        ("body", "".join(entry.lines)),
+    ):
+        m = _ISO_DATE_RE.search(text)
+        if m:
+            entry.date, entry.date_source = m.group(0), source
+            return
+
+
+def fill_missing_dates(entries: list[Entry]) -> None:
+    """An entry with no date anywhere takes the nearest dated entry's: the
+    preceding one, or the following one when none precedes."""
+    dated = [e for e in entries if e.date]
+    if not dated:
+        raise ValueError("no entry carries a date")
+    for i, entry in enumerate(entries):
+        if entry.date:
+            continue
+        before = [e for e in entries[:i] if e.date]
+        entry.date = (before[-1] if before else next(e for e in entries if e.date)).date
+        entry.date_source = "inferred from a neighbour"
+
+
+def _marker_texts(entry: Entry) -> list[str]:
+    body = "".join(entry.lines)
+    return [body[m.end() : m.end() + 250] for m in _MARKER_RE.finditer(body)]
+
+
+def derive_status(entry: Entry) -> None:
+    opens, decided = _OPEN_RE.search(entry.title), _DECIDED_RE.search(entry.title)
+    if opens and decided:
+        entry.status = "open"
+        entry.status_unclear = "title has both open and decided wording"
+        return
+    if not opens:
+        entry.status = "decided"
+        return
+    markers = _marker_texts(entry)
+    if any(_RULING_RE.search(t) for t in markers):
+        entry.status = "decided"
+    else:
+        entry.status = "open"
+        if markers:
+            entry.status_unclear = "open title; Updates present, none reads as a ruling"
+
+
+def assign_names(
+    entries: list[Entry], rng: random.Random | secrets.SystemRandom
+) -> None:
+    taken: set[str] = set()
+    for entry in entries:
+        while True:
+            entry_id = "".join(rng.choice(_ID_CHARS) for _ in range(5))
+            if entry_id not in taken:
+                break
+        taken.add(entry_id)
+        slug = re.sub(r"[^a-z0-9]+", "-", entry.title.lower()).strip("-")
+        if len(slug) > _SLUG_MAX:
+            slug = slug[:_SLUG_MAX].rsplit("-", 1)[0] or slug[:_SLUG_MAX]
+        entry.entry_id = entry_id
+        entry.filename = f"{entry_id}-{slug or 'entry'}.md"
+
+
+def render(entry: Entry) -> str:
+    return (
+        f"---\nid: {entry.entry_id}\ndate: {entry.date}\nstatus: {entry.status}\n"
+        f"supersedes: []\nrelated: []\n---\n{''.join(entry.lines)}"
+    )
+
+
+def find_suspects(entries: list[Entry]) -> list[str]:
+    """Markers whose wording or id points at an entry other than the one they
+    sit in, and every column-zero Update head (an entry of its own that
+    corrects an earlier one). For the reviewer to move or reject."""
+    out = []
+    for entry in entries:
+        if _MARKER_RE.match(entry.lines[0][2:]):
+            out.append(
+                f"line {entry.start_line}: column-zero Update entry {entry.title[:70]!r}; "
+                "a separate entry, not merged into the entry it corrects"
+            )
+    for entry in entries:
+        body = "".join(entry.lines)
+        for m in _MARKER_RE.finditer(body):
+            line = entry.start_line + body.count("\n", 0, m.start())
+            text = " ".join(body[m.start() : m.start() + 600].split())
+            why = []
+            if _MISFILED_RE.search(text):
+                why.append("wording says it is misfiled")
+            elif _POINTS_ELSEWHERE_RE.search(text[:300]):
+                why.append("wording points at another entry")
+            lead = _MARKER_ID_RE.match(text)
+            if lead and not _key_pattern(lead.group(1)).search(entry.title):
+                homes = [
+                    e for e in entries if _key_pattern(lead.group(1)).search(e.title)
+                ]
+                why += [
+                    f"its id {lead.group(1)} heads the entry at line {h.start_line}"
+                    for h in homes
+                ]
+            for named in _NAMED_ENTRY_RE.findall(text[:300]):
+                homes = [e for e in entries if _key_pattern(named).search(e.title)]
+                if homes and entry not in homes:
+                    why.append(f"names the {named} entry at line {homes[0].start_line}")
+            if why:
+                out.append(
+                    f"line {line} (entry at line {entry.start_line}): "
+                    f"{'; '.join(dict.fromkeys(why))}: {text[:70]!r}"
+                )
+    return list(dict.fromkeys(out))
+
+
+def build_mapping(text: str, entries: list[Entry], preamble_lines: int) -> list[dict]:
+    """Every old heading anchor (any level, outside fences) and every entry
+    title -> its new file. Anchors repeat as GitHub numbers them (-1, -2)."""
+    lines = text.splitlines(keepends=True)
+    inside = fence_flags(lines)
+    owner: list[Entry | None] = [None] * len(lines)
+    for entry in entries:
+        for k in range(len(entry.lines)):
+            owner[entry.start_line - 1 + k] = entry
+    seen: dict[str, int] = {}
+    rows = []
+    for i, line in enumerate(lines):
+        m = None if inside[i] else _HEADING_RE.match(line)
+        if not m:
+            continue
+        slug = github_slug(m.group(1))
+        n = seen.get(slug, 0)
+        seen[slug] = n + 1
+        anchor = slug if n == 0 else f"{slug}-{n}"
+        home = owner[i]
+        rows.append(
+            {
+                "kind": "heading",
+                "old_anchor": anchor,
+                "old_title": m.group(1),
+                "old_line": i + 1,
+                "new_file": home.filename if home else "README.md",
+            }
+        )
+    for entry in entries:
+        if entry.kind == "bullet":
+            rows.append(
+                {
+                    "kind": "bullet",
+                    "old_anchor": None,
+                    "old_title": entry.title,
+                    "old_line": entry.start_line,
+                    "new_file": entry.filename,
+                }
+            )
+    return sorted(rows, key=lambda r: r["old_line"])
+
+
+def migrate(
+    text: str,
+    overrides: tuple[Override, ...] | None = None,
+    rng: random.Random | secrets.SystemRandom | None = None,
+) -> Result:
+    preamble_lines, entries = split_entries(text)
+    if not entries:
+        raise ValueError("no entries found")
+    source_body = "".join(text.splitlines(keepends=True)[preamble_lines:])
+    result = Result(preamble_lines, entries, source_body=source_body)
+    result.applied = apply_overrides(
+        entries, OVERRIDES if overrides is None else overrides
+    )
+    for entry in entries:
+        derive_date(entry)
+        derive_status(entry)
+    fill_missing_dates(entries)
+    assign_names(entries, rng or secrets.SystemRandom())
+    result.suspects = find_suspects(entries)
+    result.mapping = build_mapping(text, entries, preamble_lines)
+    return result
+
+
+def _strip_frontmatter(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    close = next(i for i, ln in enumerate(lines[1:], 1) if ln.strip() == "---")
+    return "".join(lines[close + 1 :])
+
+
+def verify(target: Path, result: Result) -> list[str]:
+    """Re-read the written files and check: one file per entry, every Update
+    marker accounted for (override-moved ones at their new home, dropped ones
+    listed), and the bodies equal the source minus preamble minus the
+    override-affected blocks."""
+    problems = []
+    names = sorted(p.name for p in target.glob("*.md") if p.name != "README.md")
+    if names != sorted(e.filename for e in result.entries):
+        return [f"{len(names)} files out for {len(result.entries)} entries in"]
+    actual = "".join(
+        _strip_frontmatter((target / e.filename).read_text(encoding="utf-8"))
+        for e in result.entries
+    )
+    markers_in = len(_MARKER_RE.findall(result.source_body))
+    dropped = sum(
+        len(_MARKER_RE.findall(a.text))
+        for a in result.applied
+        if a.target_entry is None
+    )
+    markers_out = len(_MARKER_RE.findall(actual))
+    if markers_in != markers_out + dropped:
+        problems.append(
+            f"{markers_in} markers in, {markers_out} out, {dropped} dropped"
+        )
+    expected = result.source_body
+    for a in result.applied:
+        if expected.count(a.text) != 1:
+            problems.append(f"override block {a.override.marker!r} is not unique")
+            continue
+        expected = expected.replace(a.text, "", 1)
+        if a.target_entry is not None:
+            if actual.count(a.text) != 1:
+                problems.append(f"moved block {a.override.marker!r} is not unique")
+                continue
+            actual = actual.replace(a.text, "", 1)
+    if actual != expected:
+        problems.append("bodies differ from source beyond the listed overrides")
+    return problems
+
+
+def unmapped_links(repo_root: Path, mapping: list[dict]) -> tuple[int, list[str]]:
+    """``(links found, anchors no mapping row covers)`` over the repo's text
+    files, for links into ``decisions.md`` headings."""
+    known = {r["old_anchor"] for r in mapping if r["old_anchor"]}
+    skip = {".git", ".venv", "worktrees", "site", "__pycache__", ".nox", "node_modules"}
+    link_re = re.compile(r"decisions\.md#([A-Za-z0-9_%.-]+)")
+    found = 0
+    missing: list[str] = []
+    for path in sorted(repo_root.rglob("*")):
+        if not path.is_file() or skip & set(path.relative_to(repo_root).parts):
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):  # fmt: skip
+            continue
+        for anchor in link_re.findall(body):
+            found += 1
+            if anchor not in known:
+                missing.append(f"{path.relative_to(repo_root)}: #{anchor}")
+    return found, missing
+
+
+def render_report(
+    result: Result, problems: list[str], links: tuple[int, list[str]] | None
+) -> str:
+    e = result.entries
+    out = [
+        f"preamble not migrated: {result.preamble_lines} lines",
+        (
+            f"entries in: {len(e)} ({sum(x.kind == 'section' for x in e)} sections, "
+            f"{sum(x.kind == 'bullet' for x in e)} bullets); files out: {len(e)}"
+        ),
+        (
+            f"Update markers in source body: {len(_MARKER_RE.findall(result.source_body))}; "
+            f"out: {sum(len(_MARKER_RE.findall(''.join(x.lines))) for x in e)}"
+        ),
+        "",
+        f"OVERRIDE TABLE ({len(result.applied)}):",
+    ]
+    for a in result.applied:
+        dest = (
+            f"moved to entry at line {a.target_entry.start_line}"
+            if a.target_entry
+            else "dropped"
+        )
+        out.append(
+            f"  {a.override.action} {a.override.marker!r} from entry at line "
+            f"{a.source_entry.start_line} ({dest}): {a.override.reason}"
+        )
+    out += [
+        "",
+        f"SUSPECTS ({len(result.suspects)}, for the reviewer to add or reject):",
+    ]
+    out += [f"  {s}" for s in result.suspects]
+    unclear = [x for x in e if x.status_unclear]
+    out += [
+        "",
+        (
+            f"STATUS: {sum(x.status == 'open' for x in e)} open, "
+            f"{sum(x.status == 'decided' for x in e)} decided; "
+            f"UNCLEAR ({len(unclear)}, defaulted to open):"
+        ),
+    ]
+    out += [
+        f"  line {x.start_line}: {x.status_unclear}: {x.title[:70]!r}" for x in unclear
+    ]
+    guessed = [x for x in e if x.date_source not in ("title", "first paragraph")]
+    out += [
+        "",
+        f"DATES: {len(e) - len(guessed)} from the head; {len(guessed)} guessed:",
+    ]
+    out += [
+        f"  line {x.start_line}: {x.date} ({x.date_source}): {x.title[:60]!r}"
+        for x in guessed
+    ]
+    if links is not None:
+        out += [
+            "",
+            f"LINKS: {links[0]} links into decisions.md headings; {len(links[1])} unmapped",
+        ]
+        out += [f"  {m}" for m in links[1]]
+    out += ["", "VERIFY: " + ("ok" if not problems else "FAILED")]
+    out += [f"  {p}" for p in problems]
+    return "\n".join(out)
+
+
+@app.command()
+def main(
+    source: Annotated[Path, typer.Argument(help="docs/decisions.md to split.")],
+    target: Annotated[Path, typer.Argument(help="Output directory; must be empty.")],
+    mapping: Annotated[
+        Path | None, typer.Option(help="Mapping file; default next to TARGET.")
+    ] = None,
+    seed: Annotated[int | None, typer.Option(help="Seed for repeatable ids.")] = None,
+    repo_root: Annotated[
+        Path | None,
+        typer.Option(help="Also check every link into decisions.md headings here."),
+    ] = None,
+) -> None:
+    """Split decisions.md into per-entry files in TARGET; print the review report."""
+    if target.exists() and any(target.iterdir()):
+        typer.echo(f"{target} is not empty; refusing to write into it", err=True)
+        raise typer.Exit(2)
+    result = migrate(
+        source.read_text(encoding="utf-8"),
+        rng=random.Random(seed) if seed is not None else None,
+    )
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in result.entries:
+        (target / entry.filename).write_text(render(entry), encoding="utf-8")
+    mapping_path = mapping or target.resolve().parent / f"{target.name}-mapping.json"
+    mapping_path.write_text(
+        json.dumps(result.mapping, indent=2) + "\n", encoding="utf-8"
+    )
+    problems = verify(target, result)
+    links = unmapped_links(repo_root, result.mapping) if repo_root else None
+    typer.echo(render_report(result, problems, links))
+    raise typer.Exit(1 if problems or (links and links[1]) else 0)
+
+
+if __name__ == "__main__":
+    app()
