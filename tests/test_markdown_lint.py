@@ -46,6 +46,12 @@ def test_md022_missing_blank_underlines_heading_text_non_ascii():
     assert _lint(lines, 1) == [("MD022", 2, 8)]
 
 
+def test_md022_closing_sequence_is_not_heading_text():
+    assert _lint(["p", "# title ##  ", ""], 1) == [("MD022", 2, 7)]
+    assert _lint(["p", "## ##", ""], 1) == [("MD022", 0, 2)]
+    assert _lint(["p", "# a#", ""], 1) == [("MD022", 2, 4)]
+
+
 def test_md022_buffer_edges_exempt():
     assert _lint(["# t", ""], 0) == []
     assert _lint(["", "# t"], 1) == []
@@ -61,6 +67,16 @@ def test_md042_empty_link_whole_range_non_ascii():
     assert _lint(["é [text]() z"], 0) == [("MD042", 2, 10)]
 
 
+def test_md042_skips_images():
+    assert _lint(["![alt]() [x]()"], 0) == [("MD042", 9, 14)]
+
+
+def test_md042_code_span_in_link_text_is_still_a_link():
+    assert _lint(["see [`f()`]() x"], 0) == [("MD042", 4, 13)]
+    assert _lint(["`[x`]() b"], 0) == []
+    assert _lint(["[a `b]() c`"], 0) == []
+
+
 def test_inline_code_span_exempts_tab_and_empty_link():
     assert _lint(["`a\tb [x]()`"], 0) == []
     assert _lint(["``a\tb`` [x]()"], 0) == [("MD042", 8, 13)]
@@ -69,8 +85,9 @@ def test_inline_code_span_exempts_tab_and_empty_link():
 
 
 def test_fenced_content_and_delimiters_yield_nothing():
-    lines = ["~~~", "a\t ", "#  h", "~~~", "  ```py ", "  x\t", "  ```"]
+    lines = ["~~~", "a\t ", "#  h", "~~~", "- item", "  ```py ", "  x\t", "  ```"]
     assert all(_lint(lines, i) == [] for i in range(len(lines)))
+    assert _lint([*lines, "x\ty"], len(lines)) == [("MD010", 1, 2)]
 
 
 def test_lint_line_returns_plain_ranges():

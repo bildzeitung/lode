@@ -22,7 +22,11 @@ Range = tuple[int, int]
 _TRAILING_WS_RE = re.compile(r"[ \t]+$")
 _HEADING_RE = re.compile(r" {0,3}(#{1,6})(?=[ \t]|$)")
 _EXTRA_SPACES_RE = re.compile(r"( {2,})(?=\S)")
-_EMPTY_LINK_RE = re.compile(r"\[[^\]]*\]\(\s*\)")
+#: Trailing whitespace plus an optional ATX closing sequence (``# title ##``),
+#: which CommonMark keeps out of the heading's text.
+_HEADING_TAIL_RE = re.compile(r"(?:[ \t]+#+)?[ \t]*$")
+#: ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not cover.
+_EMPTY_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(\s*\)")
 _BACKTICK_RUN_RE = re.compile(r"`+")
 
 
@@ -44,10 +48,13 @@ def _code_spans(line: str) -> list[Range]:
 
 
 def _outside_spans(ranges: list[Range], spans: list[Range]) -> list[Range]:
+    """Drop every range with its first or last character in a code span. A
+    span strictly inside a range drops nothing: code in a link's text
+    (``[`f()`]()``) leaves the link a link."""
     return [
-        r
-        for r in ranges
-        if not any(r[0] < s_end and s_start < r[1] for s_start, s_end in spans)
+        (start, end)
+        for start, end in ranges
+        if not any(s <= start < e or s < end <= e for s, e in spans)
     ]
 
 
@@ -88,7 +95,7 @@ def lint_line_tagged(
         after_ok = index == len(lines) - 1 or _is_blank(lines[index + 1])
         if not (before_ok and after_ok):
             text_start = len(line) - len(line[h.end() :].lstrip())
-            text_end = len(line.rstrip())
+            text_end = _HEADING_TAIL_RE.search(line, h.end()).start()
             if text_start >= text_end:
                 found.append(("MD022", h.start(1), h.end(1)))
             else:
