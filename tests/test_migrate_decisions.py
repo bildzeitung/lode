@@ -17,6 +17,8 @@ _gate = load_module_from_path(
     REPO_ROOT / "scripts" / "check_decisions_entries.py",
 )
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "decisions_small.md"
+# Read at import: every test runs with the list swapped (the autouse fixture).
+REAL_NEW_ENTRY_BULLETS = _mig.NEW_ENTRY_BULLETS
 runner = CliRunner()
 
 MOVE = _mig.Override(
@@ -30,6 +32,8 @@ DROP = _mig.Override(
 )
 
 
+# The fixture file's one listed bullet. A test on an inline text, which has no
+# such bullet, empties the list with ``_no_new_entry_bullets``.
 @pytest.fixture(autouse=True)
 def _fixture_new_entry_bullets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -37,6 +41,11 @@ def _fixture_new_entry_bullets(monkeypatch: pytest.MonkeyPatch) -> None:
         "NEW_ENTRY_BULLETS",
         (("Update (lode-ggg1", "a correction filed as its own entry"),),
     )
+
+
+@pytest.fixture
+def _no_new_entry_bullets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_mig, "NEW_ENTRY_BULLETS", ())
 
 
 def _text() -> str:
@@ -83,14 +92,32 @@ def test_a_sub_point_bullet_joins_its_section_and_a_listed_bullet_does_not() -> 
     assert "lode-ggg1" not in "".join(
         next(e for e in entries if "Second section" in e.title).lines
     )
+    assert first.sub_points == [(31, "A bullet inside the section (lode-eee3).")]
+
+
+def test_a_bullet_after_a_listed_bullet_is_an_entry_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = "# t\n\n## S\n\n- **sub.** a\n- **Listed.** b\n- **After.** c\n"
+    monkeypatch.setattr(_mig, "NEW_ENTRY_BULLETS", (("Listed", "its own"),))
+    _, entries = _mig.split_entries(text)
+    assert [e.title for e in entries] == ["S", "Listed.", "After."]
+    assert entries[0].sub_points == [(5, "sub.")]
+
+
+@pytest.mark.parametrize("prefix", ["No such bullet", "Update (lode-", ""])
+def test_a_new_entry_row_that_matches_nothing_or_twice_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    text = _text() + "\n- **Update (lode-hhh1, 2026-03-11).** A second one.\n"
+    monkeypatch.setattr(_mig, "NEW_ENTRY_BULLETS", ((prefix, "x"),))
+    with pytest.raises(ValueError, match="new-entry row"):
+        _mig.split_entries(text)
 
 
 def test_the_real_new_entry_list_gives_a_reason_per_row() -> None:
-    real = load_module_from_path(
-        "migrate_decisions_real", REPO_ROOT / "scripts" / "migrate_decisions.py"
-    )
-    assert len(real.NEW_ENTRY_BULLETS) == 2
-    assert all(prefix and reason for prefix, reason in real.NEW_ENTRY_BULLETS)
+    assert REAL_NEW_ENTRY_BULLETS
+    assert all(prefix and reason for prefix, reason in REAL_NEW_ENTRY_BULLETS)
 
 
 def test_bodies_concatenate_to_the_source_minus_the_preamble() -> None:
@@ -184,6 +211,7 @@ _SHIFT = _mig.Override(
 )
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_an_override_leaves_suspect_lines_and_the_mapping_on_source_lines() -> None:
     result = _mig.migrate(_SHIFTED, overrides=(_SHIFT,), rng=random.Random(0))
     (moved,) = result.applied
@@ -224,6 +252,7 @@ def test_status_and_dates_are_derived_from_the_head() -> None:
     assert by["First section"].status == "decided"
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_unclear_status_defaults_to_open_and_is_flagged() -> None:
     both = "# t\n\n- **Open and decided (2026-01-01).** body\n"
     entry = _mig.migrate(both, overrides=()).entries[0]
@@ -277,9 +306,13 @@ def test_mapping_covers_every_heading_anchor_with_github_numbering() -> None:
     assert anchors["first-section-decided-lode-eee1"]["new_file"] == first.filename
     assert "not-a-section-either" not in anchors
     bullets = [r for r in result.mapping if r["kind"] == "bullet"]
-    assert len(bullets) == sum(e.kind == "bullet" for e in result.entries)
+    assert len(bullets) == 6
+    # A section's sub-point keeps its row, pointing at the section's file.
+    sub_point = next(r for r in bullets if "lode-eee3" in r["old_title"])
+    assert (sub_point["old_line"], sub_point["new_file"]) == (31, first.filename)
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_an_explicit_anchor_the_mapping_has_no_row_for_is_an_error() -> None:
     text = '# t\n\n- **A (2026-01-01).** x\n  <a id="pin"></a>\n'
     with pytest.raises(ValueError, match="pin"):
@@ -312,6 +345,10 @@ def test_cli_writes_entries_and_mapping_and_prints_the_report(
     assert "VERIFY: ok" in result.output
     assert "OVERRIDE TABLE" in result.output
     assert "(3 lines from line 38)" in result.output
+    assert "SECTION SUB-POINTS (1 bullets merged into 1 sections" in result.output
+    assert "line 31 (section at line 25): 'A bullet inside the section" in result.output
+    assert "NEW-ENTRY BULLETS (1):" in result.output
+    assert "line 46: 'Update (lode-ggg1, 2026-03-10)" in result.output
     assert "SUSPECTS" in result.output
     assert "Every title with open wording (2):" in result.output
     assert "line 13: open (no Update)" in result.output

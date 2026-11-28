@@ -29,7 +29,7 @@ The section text, dated 2026-03-01.
   **Update (lode-eee2, 2026-03-02):** an indented marker under the section.
 
 - **A bullet inside the section (lode-eee3).** A column-zero bullet after a
-  section's own text is an entry of its own.
+  section's own text is a sub-point of the section, part of its entry.
 
 ## Second section (lode-fff1)
 
