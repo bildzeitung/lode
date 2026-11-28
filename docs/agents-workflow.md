@@ -2484,6 +2484,17 @@ fixed by asserting the full four-name contract in the same block, pinned by a pa
 the identical fail-OPEN class `lode-dia6`'s own review closed for the functions, reopened one line
 lower down.
 
+**Update (2026-11-28, bildzeitung — lode-mxo0h): the cap stays at 16 KiB.** The lode-qzg4 decision
+above is not rewritten; this appends to it. The question was whether the cap should move now that its
+cost premise has changed: after lode-4n0kf and lode-5lv5e, ordinary text costs 0.1-0.4 s at ~36 KB
+rather than the ~1.1 s lode-qzg4 priced. Option (a) was taken, keep `SHELL_QUOTE_SPLIT_MAX_LEN` at 16
+KiB, for three reasons. The cap still bounds the worst case: an input shaped to defeat the plain-run
+fast path costs about 0.5 s at 16 KiB, and raising the cap raises that ceiling in proportion. A false
+DENY is cheap to recover from (the recovery paths above). And how often a real command exceeds 16 KiB
+is unmeasured, so there is no evidence that the cheap false DENY is being paid often enough to justify
+a higher ceiling. lode-snn5v (the scan is quadratic in the length of each substring expansion) may
+reopen the question with its own figures. No constant, guard or test changes with this entry.
+
 ### Validate `land_head`/`review_head` shape before trusting them as drift signals (lode-xdg3)
 
 **During the `/code` fan-out of 2026-08-08, a rebase pickup (`lode-r9z0`) wrote a 39-character
