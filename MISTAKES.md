@@ -26,6 +26,9 @@ Newest first.
     above are gone and a tracked `.sh` file in a new directory cannot turn it red this way.
     The rule above is unchanged: other corpus-scan gates can still fail on a shell-only or
     markdown-only change.
+  - **Update (lode-0gkjq, 2026-11-28):** by maintainer ruling (`lode-31kju`, option A),
+    CLAUDE.md's pre-merge rule now covers every merge to `trunk` outside `/land`, whatever file
+    types it touches, and names `nox -t fix` beside the two gates above.
 
 ## 2026-11-23 — A memory-bound claim in docs/ could not be re-verified because the measurement script behind it was not kept
 

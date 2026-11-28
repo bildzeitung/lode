@@ -289,7 +289,7 @@
 # "a caller that never held the lock can call it harmlessly" contract, so
 # per-call-site threading is the correct end state, not a stopgap. Full
 # reasoning lives in docs/decisions.md
-# (uv run --frozen python scripts/docs_index_query.py "lode-yuwt") and
+# (grep -rn "lode-yuwt" docs/) and
 # docs/agents-workflow.md -- deliberately not re-expanded here (lode-1n4x).
 #
 # For WHY this check exists (the self-concealing-overlap hazard: a displaced

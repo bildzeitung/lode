@@ -57,10 +57,7 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
   file under `docs/` (in the worktree); open questions to `docs/decisions.md`; tunables to
   `docs/configuration.md`. A design fact recorded only in a bd note or memory **forks the record**.
-  Before grepping a doc for what it says on something, try the lookup index first —
-  `uv run --frozen python scripts/docs_index_query.py "<terms>"` — it returns ranked
-  `path:line_lo-line_hi` pointers into `docs/*.md` without loading a whole file (`lode-t6o1`; see
-  [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
+  To look up what a doc says on something, `grep` over `docs/` rather than loading a whole file.
   **Recording a maintainer ruling in `docs/decisions.md`:** I write the ruling. I write the failure
   mechanism the ticket claims only after tracing it in the code, or labelled "the ticket's claim"
   (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
@@ -313,7 +310,7 @@ a `land/<other-id>` that has *since landed* — whose `HEAD` is already an ances
 passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the
 script's own header comment and
 [docs/decisions.md](../../docs/decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
+(`grep -rn "lode-3v1p" docs/`) — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 
 **The worktree is already locked — I take no lock of my own (lode-t76f).** A freshly created worktree

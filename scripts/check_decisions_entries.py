@@ -6,9 +6,6 @@ exist, a ``supersedes`` cycle, and any modification or deletion of an entry
 file that exists where ``HEAD`` forked from the base ref. Exit 2 means the gate
 could not run (no merge base with the base ref) and is never a verdict on the
 entries. The format is defined in ``docs/decisions/README.md``.
-
-:func:`chain_head` is shared with ``docs_index_query.py``, which loads this
-module as a sibling to name the head of a superseded hit's chain.
 """
 
 from __future__ import annotations

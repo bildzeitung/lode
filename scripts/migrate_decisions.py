@@ -8,7 +8,9 @@ result into ``docs/``. The target must not exist or must be empty, so a run can
 never overwrite ``docs/decisions/``.
 
 An entry is a column-zero ``- **`` bullet or a ``## `` section outside a code
-fence; it runs to the next entry. Everything before the first entry (the
+fence; it runs to the next entry. A section's entry also holds the column-zero
+bullets after it, its sub-points, up to the next section or the first bullet
+named in :data:`NEW_ENTRY_BULLETS`. Everything before the first entry (the
 preamble, superseded by the directory README) is not migrated. An entry's body
 is its source lines VERBATIM, trailing blank lines included, so the bodies
 concatenated in source order are the source minus the preamble, byte for byte.
@@ -16,6 +18,9 @@ The only edits are the reviewed :data:`OVERRIDES`: a marker block moved to the
 entry it corrects, or dropped as obsolete. :func:`verify` re-reads the written
 files and checks that, so a run that prints ``VERIFY: ok`` has proved the
 counts and the bytes.
+
+The report lists every bullet merged into a section, for the reviewer to accept
+or to name in :data:`NEW_ENTRY_BULLETS`.
 
 Frontmatter, derived mechanically. The report lists every date not taken from a
 title and every status derived from a title with open wording:
@@ -31,7 +36,8 @@ title and every status derived from a title with open wording:
 - ``supersedes`` and ``related`` are empty: the migration invents no edges.
 
 Also written: a mapping file (JSON) from every old heading anchor and every
-bullet title to the new file, for the link rewiring in lode-ebayj.4.
+bullet title, a section's sub-points included, to the new file, for the link
+rewiring in lode-ebayj.4.
 """
 
 from __future__ import annotations
@@ -108,22 +114,19 @@ class Override:
 
 
 # The lode-d3snk Update was appended under the lode-fg7w7.3 section by mistake;
-# it corrects the lode-yt7q2 entry just before it. A column-zero bullet inside
-# a ``## `` section is an entry of its own, so the unit it corrects is the last
-# of that section, the "Still missed" bullet (lode-k813a), which is also where
-# one lode-htkr3 pointer sits. Both pointers only say the d3snk Update is
-# misfiled and are obsolete once it is moved. The third lode-htkr3 Update
-# (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
+# it corrects the lode-yt7q2 entry just before it. Both lode-htkr3 pointers only
+# say the d3snk Update is misfiled (one sits in the lode-yt7q2 entry, one in the
+# lode-fg7w7.3 section) and are obsolete once it is moved. The third lode-htkr3
+# Update (DECIDED, proposals 2 and 3) is the lode-fg7w7.3 section's own.
 OVERRIDES: tuple[Override, ...] = (
     Override(
         "lode-fg7w7.3",
         "**Update (lode-d3snk, 2026-11-27):**",
-        "answers the 'Still missed' bullet of the lode-yt7q2 entry, per the "
-        "lode-htkr3 pointer",
-        target="lode-k813a",
+        "answers the lode-yt7q2 entry, per the lode-htkr3 pointer",
+        target="lode-yt7q2",
     ),
     Override(
-        "lode-k813a",
+        "lode-yt7q2",
         "**Update (lode-htkr3, 2026-11-27):**",
         "pointer to the misfiled lode-d3snk Update, obsolete once it is moved",
     ),
@@ -142,6 +145,8 @@ class Entry:
     start_line: int  # 1-based line in the source
     title: str
     lines: list[str]
+    # (source line, title) of each bullet merged into this section.
+    sub_points: list[tuple[int, str]] = field(default_factory=list)
     date: str = ""
     date_source: str = ""
     status: str = "decided"
@@ -178,8 +183,36 @@ def _title(kind: str, lines: list[str]) -> str:
     return " ".join((joined[:end] if end != -1 else lines[0][4:]).split())
 
 
+# Column-zero bullets that follow a ``## `` section but are entries of their own,
+# not its sub-points (lode-pqhhx Q1=B). Every other bullet between a section and
+# the first bullet listed here is part of the section's entry. A listed bullet
+# ends the section, so a bullet after it is an entry of its own, listed or not:
+# the second row changes no output and is here so that both are reviewed. Each
+# row is a prefix of exactly one bullet title; reviewed like OVERRIDES.
+NEW_ENTRY_BULLETS: tuple[tuple[str, str], ...] = (
+    (
+        "/land SKILL.md does not carry a",
+        "its own decision, follows the lode-sflg section without belonging to it",
+    ),
+    (
+        "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut",
+        "its own decision (lode-w18a.10), follows the lode-sflg section",
+    ),
+)
+
+
+def _listed(entries: list[Entry], prefix: str) -> list[Entry]:
+    """The bullet entries a NEW_ENTRY_BULLETS row's ``prefix`` names."""
+    return [e for e in entries if e.kind == "bullet" and e.title.startswith(prefix)]
+
+
 def split_entries(text: str) -> tuple[int, list[Entry]]:
-    """``(preamble line count, entries)`` for a decisions.md text."""
+    """``(preamble line count, entries)`` for a decisions.md text.
+
+    A ``## `` section and the column-zero bullets after it form one entry, except
+    a bullet named in NEW_ENTRY_BULLETS, which starts an entry of its own. A row
+    of that list that does not match exactly one bullet title is an error.
+    """
     lines = text.splitlines(keepends=True)
     inside = fence_flags(lines)
     starts = [
@@ -190,10 +223,25 @@ def split_entries(text: str) -> tuple[int, list[Entry]]:
     if not starts:
         return len(lines), []
     bounds = [*starts, len(lines)]
-    entries = []
+    entries: list[Entry] = []
     for lo, hi in pairwise(bounds):
         kind = "section" if lines[lo].startswith("## ") else "bullet"
-        entries.append(Entry(kind, lo + 1, _title(kind, lines[lo:hi]), lines[lo:hi]))
+        title = _title(kind, lines[lo:hi])
+        if (
+            kind == "bullet"
+            and entries
+            and entries[-1].kind == "section"
+            and not any(title.startswith(p) for p, _reason in NEW_ENTRY_BULLETS)
+        ):
+            entries[-1].lines.extend(lines[lo:hi])
+            entries[-1].sub_points.append((lo + 1, title))
+            continue
+        entries.append(Entry(kind, lo + 1, title, lines[lo:hi]))
+    # A listed bullet is never merged, so the entries hold every match.
+    for prefix, _reason in NEW_ENTRY_BULLETS:
+        hits = len(_listed(entries, prefix))
+        if hits != 1:
+            raise ValueError(f"new-entry row {prefix!r} matches {hits} bullet titles")
     return starts[0], entries
 
 
@@ -426,16 +474,21 @@ def build_mapping(text: str, entries: list[Entry]) -> list[dict]:
     if drift:
         raise ValueError(f"anchors differ from lode.docs_slug's: {sorted(drift)}")
     for entry in entries:
-        if entry.kind == "bullet":
-            rows.append(
-                {
-                    "kind": "bullet",
-                    "old_anchor": None,
-                    "old_title": entry.title,
-                    "old_line": entry.start_line,
-                    "new_file": entry.filename,
-                }
-            )
+        bullets = (
+            [(entry.start_line, entry.title)]
+            if entry.kind == "bullet"
+            else entry.sub_points
+        )
+        rows += [
+            {
+                "kind": "bullet",
+                "old_anchor": None,
+                "old_title": title,
+                "old_line": line,
+                "new_file": entry.filename,
+            }
+            for line, title in bullets
+        ]
     return sorted(rows, key=lambda r: r["old_line"])
 
 
@@ -577,6 +630,25 @@ def render_report(
             f"({len(a.text.splitlines())} lines from line {a.source_line}) from "
             f"entry at line {a.source_entry.start_line} ({dest}): {a.override.reason}"
         )
+    merged = [(x, line, title) for x in e for line, title in x.sub_points]
+    out += [
+        "",
+        (
+            f"SECTION SUB-POINTS ({len(merged)} bullets merged into "
+            f"{sum(bool(x.sub_points) for x in e)} sections; one that is an entry "
+            "of its own goes in NEW_ENTRY_BULLETS):"
+        ),
+    ]
+    out += [
+        f"  line {line} (section at line {x.start_line}): {title[:70]!r}"
+        for x, line, title in merged
+    ]
+    out += ["", f"NEW-ENTRY BULLETS ({len(NEW_ENTRY_BULLETS)}):"]
+    out += [
+        f"  line {x.start_line}: {x.title[:70]!r}: {reason}"
+        for prefix, reason in NEW_ENTRY_BULLETS
+        for x in _listed(e, prefix)
+    ]
     out += [
         "",
         f"SUSPECTS ({len(result.suspects)}, for the reviewer to add or reject):",

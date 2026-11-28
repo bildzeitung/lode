@@ -48,10 +48,11 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -82,7 +83,9 @@ REAL_SHA = _real_sha()
 # ---------------------------------------------------------------------------
 
 
-def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
+def _script_output(
+    command: str, *, cwd: Path = REPO_ROOT, env: Mapping[str, str] | None = None
+) -> dict | None:
     """Run the script against `command`; return its hookSpecificOutput, or None if allowed."""
     proc = subprocess.run(
         ["bash", str(SCRIPT), command],
@@ -91,6 +94,7 @@ def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
         text=True,
         timeout=30,
         check=False,
+        env=env,
     )
     assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
     if not proc.stdout.strip():
@@ -649,6 +653,21 @@ def test_command_exceeding_the_scan_cap_is_denied_fast() -> None:
         f"guard took {elapsed:.3f}s past the scan cap -- it must deny BEFORE calling "
         "_split_unquoted, not after paying its cost (lode-rjqm)"
     )
+
+
+def test_scan_cap_counts_bytes_under_a_utf8_caller_locale() -> None:
+    """lode-r5eth: the cap bounds the bytes `_split_unquoted` iterates, whatever locale the hook
+    process runs in. 9,000 two-byte characters (18,000 bytes) is under 16,384 characters but
+    over 16,384 bytes, so it must DENY even under a UTF-8 locale, naming bytes as the unit."""
+    command = f"git commit -m '{REAL_SHA} " + ("é" * 9000) + "'"
+    assert len(command) < 16_384 < len(command.encode()), (
+        "fixture must straddle the cap"
+    )
+    out = _script_output(command, env=os_env({"LC_ALL": "C.UTF-8"}))
+    assert out is not None and out["permissionDecision"] == "deny", (
+        "a command past the cap in bytes must DENY under a UTF-8 caller locale"
+    )
+    assert "bytes" in out["permissionDecisionReason"], out["permissionDecisionReason"]
 
 
 # The GLOBAL "which PreToolUse(Bash) guards are installed" inventory assertion (including this

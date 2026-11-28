@@ -74,11 +74,8 @@ The source of truth is the design under [`docs/`](docs/). Read [`docs/design.md`
 - [`docs/configuration.md`](docs/configuration.md) — every tunable knob and build constant
 - [`docs/decisions.md`](docs/decisions.md) — open decisions, deferred but not forgotten
 
-How to look anything up in those docs without reading one whole is single-sourced in
-[`docs/docs-index.md`](docs/docs-index.md), imported below so it loads into every session; add new
-docs-index guidance there, not here.
-
-@docs/docs-index.md
+To look anything up in those docs without reading one whole, `grep -rn` over `docs/`, which also
+covers the entry files under `docs/decisions/`.
 
 **Build sequencing lives in `docs/design.md` §7** — core-first (notes + version chains + cited Q&A + a minimal eval harness), then connectors one at a time. Do not fan out before the core loop works.
 
@@ -103,11 +100,12 @@ pays no per-worktree init) and runs `<cmd>` inside it. For an interactive shell,
 ```bash
 uv run --frozen nox -t fix
 uv run --frozen nox -s tests
-uv run --frozen python scripts/docs_index_query.py "<terms>"
 ```
 
 - The env lives at **`./.venv`** (repo root), not in module subdirs.
-- Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
+- Any merge to `trunk` outside `/land` gets **`nox -t fix`**, **`nox -s tests`** and
+  **`nox -t everything-else`** on the merged result before it is pushed, whatever file types it
+  touches (direct merges are permitted). Run tests via nox, not a hand-rolled venv.
 - Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
 - `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is where exact versions live
   for every `uv sync` / `uv run --frozen`, which never re-locks, and it is the only place they

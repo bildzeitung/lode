@@ -75,7 +75,7 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../../docs/decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
+(`grep -rn "lode-3v1p" docs/`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
 nonzero exit (3 or 4, already explained by the guard itself).

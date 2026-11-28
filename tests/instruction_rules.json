@@ -66,11 +66,6 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "docs-lookup-index-first",
-    "phrase": "Look up what a doc says with the lookup"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
     "rule": "file-mistakes-autonomously",
     "phrase": "**File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.**"
   },
@@ -598,11 +593,6 @@
     "file": ".claude/agents/coding.md",
     "rule": "design-decisions-are-doc-edits",
     "phrase": "Design decisions are doc edits, not notes."
-  },
-  {
-    "file": ".claude/agents/coding.md",
-    "rule": "docs-index-before-grep",
-    "phrase": "try the lookup index first"
   },
   {
     "file": ".claude/agents/coding.md",
