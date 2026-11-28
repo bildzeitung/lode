@@ -166,15 +166,14 @@ async def test_one_lint_per_line_per_render_pass(monkeypatch) -> None:
     app = _App(soft_wrap=True)
     async with app.run_test(size=(40, 20)) as pilot:
         area = app.query_one(LintTextArea)
+        linted.clear()
         area.load_text("word " * 60 + "[a]() tail\t\n")
         await pilot.pause()
-        linted.clear()
-        area.render_lines(Region(0, 0, 40, 20))
-        assert linted == [0]
+        assert linted == [0, 1]
         # Outside a pass nothing is kept.
         area.get_line(0)
         area.get_line(0)
-        assert linted == [0, 0, 0]
+        assert linted == [0, 1, 0, 0]
         assert area.lint_ranges is None
 
 
