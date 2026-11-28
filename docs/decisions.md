@@ -5572,6 +5572,15 @@ entries below from being rewritten to chase the current tree.)
   base-theme-plus-overrides; the CLI half followed as `lode-mk9j`. That entry answers reasons 1 and
   2 above and overrides reason 3: the revisit trigger was not met, and the maintainer reopened it
   as a preference call.
+
+  **Update (lode-d0az7, 2026-11-28):** reason 3's cause is wrong for the TUI. Textual 8.2.8's
+  `ANSIToTruecolor` filter is on (lode never sets `ansi_color`) and replaces an ANSI-named colour
+  with one from Textual's own ANSI theme before it is written, so `magenta` (index 5) became
+  `#f4005f`; the terminal theme did not choose it. Checked headless under `run_test`; not checked
+  against a real terminal driver or a terminal without truecolor, where the terminal's own palette
+  may matter again. The conclusion stands: 256-colour names keep fixed xterm values, and the
+  pressure was relieved by moving into that range. The CLI statement is unchanged (it writes
+  through a rich `Console`, so its ANSI names follow the terminal theme).
 - **lode keeps `AGENTS.md` — does NOT drop it the way harness-export did (`lode-s9xe.9`,
   2026-08-13).** harness-export's commit `8b444b9` deleted its `template/AGENTS.md` (54 lines) and
   folded the content into `CLAUDE.md`, on the grounds that `CLAUDE.md` is imported into every

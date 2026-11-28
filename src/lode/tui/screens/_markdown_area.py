@@ -76,10 +76,12 @@ from lode.tui.widgets.lint_text_area import LintTextArea
 #:
 #: MAINTAINER DECISION (lode-lab1 notes, revised lode-dmbc): colour only -- no
 #: bold, no background tint. Every value sits in the 256-colour range rather
-#: than the standard 16: indices 0-15 are remapped by the user's terminal
-#: theme, which is what made the original ``"magenta"`` (index 5) read as harsh
-#: and gave no way to soften it. The 256-colour names render consistently
-#: without requiring truecolor, so hex was not needed.
+#: than the standard 16: Textual's ANSIToTruecolor filter (on, since lode never
+#: sets ``ansi_color``) replaces an ANSI-named colour with one from Textual's
+#: own ANSI theme, so the original ``"magenta"`` (index 5) became #f4005f, which
+#: read as harsh and gave no way to soften it. 256-colour names keep their
+#: fixed xterm values, so hex was not needed. Not checked: a terminal without
+#: truecolor, where the terminal's own palette may matter again.
 #:
 #: * ``text.literal`` -- lode-76go's spike confirmed this carries a whole-line
 #:   span on every line of a fenced code block (delimiters, info string, and

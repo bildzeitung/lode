@@ -192,9 +192,10 @@ def test_note_body_syntax_styles_is_exactly_the_declared_palette() -> None:
 def test_note_body_palette_avoids_the_terminal_themed_standard_16() -> None:
     """Every colour resolves outside indices 0-15 (lode-dmbc).
 
-    The original ``"magenta"`` was index 5, inside the range a terminal remaps
-    to its own theme -- which is both why it rendered harsh and why there was
-    no way to soften it in place. Asserting the resolved colour type (rather
+    The original ``"magenta"`` was index 5, inside the range Textual's
+    ANSIToTruecolor filter replaces with a colour from its own ANSI theme
+    (#f4005f) -- which is both why it rendered harsh and why there was no way
+    to soften it in place. Asserting the resolved colour type (rather
     than the names) keeps this honest if a name is swapped later.
     """
     for capture, style in NOTE_BODY_SYNTAX_STYLES.items():

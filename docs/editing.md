@@ -66,10 +66,12 @@ deliberately in the other direction for `punctuation.delimiter`, which lands aft
 and so dims the fence characters on top of the whole-line code span.
 
 **Colour only — no bold, no background tint** (maintainer decision), and **every value sits in the
-256-colour range, never the standard 16.** Indices 0–15 are remapped by the user's terminal theme:
-the original `text.literal` colour was `magenta` (index 5), which is why it rendered harsh and why
-there was no way to soften it in place. The 256-colour names render consistently without requiring
-truecolor, so hex — which would have hardcoded a dark-background assumption — was not needed.
+256-colour range, never the standard 16.** Textual replaces an ANSI-named colour (indices 0–15)
+with one from its own ANSI theme before drawing it (its `ANSIToTruecolor` filter, on because lode
+never sets `ansi_color`; checked headless under `run_test`, not against a real terminal driver, and
+not on a terminal without truecolor, where the terminal's own palette may matter again): the
+original `text.literal` colour was `magenta` (index 5), which came out as `#f4005f`, which is why
+it rendered harsh and why there was no way to soften it in place. The 256-colour names keep their fixed xterm values (`plum3` is `#d787d7`), so hex — which would have hardcoded a dark-background assumption — was not needed.
 The table's five values are defaults that `[tui.theme.syntax]` can override (see the
 `[tui.theme]` row in [configuration.md](configuration.md#tui--theme-tuitheme-lode-cwyk)). The
 design record is the `lode-5zxt` entry ("User-configurable colour, revisited") in

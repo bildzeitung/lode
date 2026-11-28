@@ -61,11 +61,14 @@ to `#5A4FCF`, but `dark_goldenrod` is deliberately *not* the closest to `#C08A3E
 256-colour value is what a terminal surface uses; do not "correct" it toward the hex.
 "Terminal-safe" here means the **256-colour xterm
 palette** (`\e[38;5;Nm`), not the 16-colour ANSI set — the lesson already learned and recorded in
-`src/lode/tui/screens/_markdown_area.py` (`lode-lab1`, retuned `lode-dmbc`): ANSI indices 0–15 are
-*remapped by the user's own terminal theme*, so a colour picked there can land anywhere (the
-original note-body magenta, ANSI index 5, read as harsh in some themes with no way to soften it
-without touching the user's config). The 256-colour range sits outside that remapping and renders
-consistently across terminals without requiring truecolor.
+`src/lode/tui/screens/_markdown_area.py` (`lode-lab1`, retuned `lode-dmbc`): in the TUI,
+Textual replaces an ANSI-named colour (indices 0–15) with one from its own ANSI theme before
+drawing it (its `ANSIToTruecolor` filter; checked headless under `run_test`), so a colour picked
+there is Textual's choice, not lode's (the original note-body magenta, ANSI index 5, came out as
+`#f4005f` and read as harsh with no way to soften it). 256-colour names keep their fixed xterm
+values and need no truecolor. Not checked: a real terminal driver, or a terminal without truecolor,
+where the terminal's own palette may matter again. The CLI is different: it writes through a rich
+`Console`, so ANSI names there do follow the terminal theme.
 
 | Role | Hex (web) | 256-colour name (TUI) | xterm index |
 |---|---|---|---|
