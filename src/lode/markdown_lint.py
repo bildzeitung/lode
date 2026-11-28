@@ -44,7 +44,11 @@ def _code_spans(line: str) -> list[Range]:
 
 
 def _outside_spans(ranges: list[Range], spans: list[Range]) -> list[Range]:
-    return [r for r in ranges if not any(r[0] < s_end and s_start < r[1] for s_start, s_end in spans)]
+    return [
+        r
+        for r in ranges
+        if not any(r[0] < s_end and s_start < r[1] for s_start, s_end in spans)
+    ]
 
 
 def _is_blank(line: str) -> bool:
@@ -70,7 +74,9 @@ def lint_line_tagged(
     if m and m.group() != "  " and cursor != (index, m.end()):
         found.append(("MD009", m.start(), m.end()))
 
-    for start, end in _outside_spans([(i, i + 1) for i, c in enumerate(line) if c == "\t"], spans):
+    for start, end in _outside_spans(
+        [(i, i + 1) for i, c in enumerate(line) if c == "\t"], spans
+    ):
         found.append(("MD010", start, end))
 
     h = _HEADING_RE.match(line)
@@ -88,7 +94,9 @@ def lint_line_tagged(
             else:
                 found.append(("MD022", text_start, text_end))
 
-    for start, end in _outside_spans([(m.start(), m.end()) for m in _EMPTY_LINK_RE.finditer(line)], spans):
+    for start, end in _outside_spans(
+        [(m.start(), m.end()) for m in _EMPTY_LINK_RE.finditer(line)], spans
+    ):
         found.append(("MD042", start, end))
 
     return sorted(found, key=lambda f: (f[1], f[2]))
