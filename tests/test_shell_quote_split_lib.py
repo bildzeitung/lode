@@ -506,7 +506,9 @@ def test_split_reads_through_a_window_without_losing_a_byte_at_its_edge(
     Every special byte placed before, on and after a window edge, in each quote state,
     must be handled as it is mid-string: the lookahead after `$` and the byte after a
     backslash are the reads that cross an edge."""
-    lead = (filler * pad)[:pad]  # `;` is a chain step per byte and leaves the join alone
+    lead = (filler * pad)[
+        :pad
+    ]  # `;` is a chain step per byte and leaves the join alone
     for text in (
         ";b'c;d'e;x",
         r'"x|y$(z`w`)"|q',
