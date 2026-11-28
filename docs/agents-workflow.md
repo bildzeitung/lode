@@ -472,7 +472,12 @@ Two rules, three message texts:
     files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [bd-update-args…]`
     (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
     broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
-    `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
+    `ls-remote` itself failed, 6 `--push` only: the field WAS written but `scripts/bd-dolt-push.sh`
+    failed or its guard refused (lode-fg7w7.5) — the push's own status is deliberately not passed
+    through, so it cannot read as 1-5 and look like a write that did not happen; re-run
+    `bd-dolt-push.sh`, never the hand-off. `--push` runs that script after a successful write, saving
+    the separate publish call at the three sites where nothing is written between the two; the
+    builder's escalation path keeps the separate push because it adds `land-escalated` between them), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
     validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable =
     drift, 4 `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs

@@ -664,17 +664,15 @@ One script derives `HEAD`, shape-checks it and writes the field in a single proc
 validated is the value written and nothing is hand-copied (lode-qh1m, lode-0a4n):
 
 ```bash
-scripts/handoff-sha.sh <id> review_head --add-label ready-for-code-review
+scripts/handoff-sha.sh <id> review_head --push --add-label ready-for-code-review
 ```
 
 Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written), 2 = this
 CALL is broken (fix the invocation), 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not
 at `HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; a nonzero exit writes
-nothing. Then publish it:
-
-```bash
-scripts/bd-dolt-push.sh
-```
+nothing. **Exit 6 is the one exception:** the write WAS done but the `--push` publish failed (or its
+guard refused) — run `scripts/bd-dolt-push.sh` alone, never re-run the handoff. `--push` runs
+`scripts/bd-dolt-push.sh` after the write, so no separate publish call follows (lode-fg7w7.5).
 
 The push publishes the claim + `ready-for-code-review` over `refs/dolt/data` — durable, cross-machine.
 
@@ -709,7 +707,8 @@ settle), I:
   it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same field
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
-  The green hand-off's script, minus the label:
+  The green hand-off's script, minus the label and minus `--push` (the next bullet writes
+  `land-escalated` before the publish, so the push must stay a separate, later call):
 
   ```bash
   scripts/handoff-sha.sh <id> review_head

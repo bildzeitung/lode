@@ -91,6 +91,79 @@ def test_handoff_writes_the_derived_head_and_passes_extra_args(
     )
 
 
+def _with_push_stub(tmp_path: Path, push_body: str) -> Path:
+    """A scripts dir holding handoff-sha.sh, validate-sha40.sh and a stub
+    bd-dolt-push.sh, so --push never touches a real Dolt remote."""
+    d = tmp_path / "scripts"
+    d.mkdir()
+    for name in ("handoff-sha.sh", "validate-sha40.sh"):
+        shutil.copy(SCRIPTS / name, d / name)
+    stub = d / "bd-dolt-push.sh"
+    stub.write_text(f"#!/usr/bin/env bash\n{push_body}\n")
+    stub.chmod(0o755)
+    return d
+
+
+def _run_stubbed(
+    d: Path, cwd: Path, bd: Path, *args: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(d / "handoff-sha.sh"), *args],
+        cwd=cwd,
+        env=fake_bin_env(bd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_handoff_push_runs_the_push_after_the_write(
+    pushed: Path, bd: Path, tmp_path: Path
+) -> None:
+    marker_file = tmp_path / "pushed"
+    d = _with_push_stub(tmp_path, f"touch {marker_file}")
+    r = _run_stubbed(
+        d, pushed, bd, "lode-x", "review_head", "--push", "--add-label", "l"
+    )
+    assert r.returncode == 0, r.stderr
+    assert marker_file.exists()
+    log = _bd_log(bd).read_text()
+    assert "--add-label" in log
+    assert "--push" not in log
+
+
+def test_handoff_without_push_never_runs_the_push(
+    pushed: Path, bd: Path, tmp_path: Path
+) -> None:
+    marker_file = tmp_path / "pushed"
+    d = _with_push_stub(tmp_path, f"touch {marker_file}")
+    assert _run_stubbed(d, pushed, bd, "lode-x", "review_head").returncode == 0
+    assert not marker_file.exists()
+
+
+@pytest.mark.parametrize("push_status", [1, 2, 7])
+def test_handoff_push_failure_is_exit_6_whatever_the_push_status(
+    pushed: Path, bd: Path, tmp_path: Path, push_status: int
+) -> None:
+    d = _with_push_stub(tmp_path, f"exit {push_status}")
+    r = _run_stubbed(d, pushed, bd, "lode-x", "review_head", "--push")
+    assert r.returncode == 6
+    assert "WAS written" in r.stderr
+    assert "review_head=" in _bd_log(bd).read_text()
+
+
+def test_handoff_push_is_skipped_when_the_write_fails(
+    pushed: Path, bd: Path, tmp_path: Path
+) -> None:
+    fake_bd(bd, default="exit 1")
+    marker_file = tmp_path / "pushed"
+    d = _with_push_stub(tmp_path, f"touch {marker_file}")
+    assert (
+        _run_stubbed(d, pushed, bd, "lode-x", "review_head", "--push").returncode == 3
+    )
+    assert not marker_file.exists()
+
+
 def test_handoff_broken_call_is_exit_2_and_writes_nothing(repo: Path, bd: Path) -> None:
     assert _run("handoff-sha.sh", repo, "lode-x", bindir=bd).returncode == 2
     assert _run("handoff-sha.sh", repo, "lode-x", "nope", bindir=bd).returncode == 2

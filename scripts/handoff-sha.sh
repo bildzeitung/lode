@@ -11,10 +11,14 @@
 # review_head). A script is a plain call, so deriving, validating and writing
 # inside one process guarantees the value validated is the value written.
 #
-# Usage: scripts/handoff-sha.sh <ticket-id> <review_head|land_head> [bd-update-args...]
+# Usage: scripts/handoff-sha.sh <ticket-id> <review_head|land_head> [--push] [bd-update-args...]
 #   Runs: bd update <ticket-id> --set-metadata <field>=<HEAD> [bd-update-args...]
 #   Extra arguments (labels, land_summary, ...) pass through to `bd update`
-#   untouched; this script owns only the SHA-valued field.
+#   untouched; this script owns only the SHA-valued field and `--push`.
+#   --push (lode-fg7w7.5): after the write succeeds, run scripts/bd-dolt-push.sh,
+#   saving the separate publish call. Never use it where bd state is written
+#   between this call and the push (the builder's escalation path adds
+#   land-escalated after it), because the push would publish too early.
 #
 # Exit 0 -> HEAD was derived, validated and written.
 # Exit 1 -> the derived value failed scripts/validate-sha40.sh (its own
@@ -30,6 +34,11 @@
 #           (lode-tx33). One `git ls-remote` read per call is accepted.
 # Exit 5 -> `git ls-remote origin` itself failed (no origin, network); nothing
 #           was written.
+# Exit 6 -> `--push` only: the field WAS written, but scripts/bd-dolt-push.sh
+#           failed (its own exit status, including exit 1 = its guard refused,
+#           is NOT passed through, so it cannot be read as one of 1-5 and look
+#           like a write that did not happen). Re-run scripts/bd-dolt-push.sh;
+#           do not re-run this script.
 # Other  -> git's own failure status from `rev-parse HEAD` (no repo, unborn
 #           HEAD); nothing was written.
 
@@ -44,6 +53,12 @@ fi
 ID="$1"
 FIELD="$2"
 shift 2
+
+PUSH=0
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--push" ]; then PUSH=1; else ARGS+=("$a"); fi
+done
 
 case "$FIELD" in
   review_head | land_head) ;;
@@ -71,7 +86,13 @@ if [ "$TIP" != "$SHA" ]; then
   exit 4
 fi
 
-if ! bd update "$ID" --set-metadata "$FIELD=$SHA" "$@"; then
+if ! bd update "$ID" --set-metadata "$FIELD=$SHA" ${ARGS[@]+"${ARGS[@]}"}; then
   echo "handoff-sha.sh: bd update failed for $ID; $FIELD was NOT written." >&2
   exit 3
+fi
+
+if [ "$PUSH" -eq 1 ] && ! "$HERE/bd-dolt-push.sh"; then
+  echo "handoff-sha.sh: $FIELD WAS written for $ID but bd-dolt-push.sh failed" \
+    "-- re-run scripts/bd-dolt-push.sh (not this script)." >&2
+  exit 6
 fi
