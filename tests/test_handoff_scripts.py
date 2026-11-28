@@ -53,12 +53,17 @@ def bd(tmp_path: Path) -> Path:
 
 
 def _run(
-    script: str, cwd: Path, *args: str, bindir: Path | None = None, **env: str
+    script: str,
+    cwd: Path,
+    *args: str,
+    bindir: Path | None = None,
+    scripts: Path = SCRIPTS,
+    **env: str,
 ) -> subprocess.CompletedProcess[str]:
     base = fake_bin_env(bindir) if bindir else os_env()
     base.update(env)
     return subprocess.run(
-        [str(SCRIPTS / script), *args],
+        [str(scripts / script), *args],
         cwd=cwd,
         env=base,
         capture_output=True,
@@ -107,19 +112,13 @@ def _with_push_stub(tmp_path: Path, push_body: str) -> Path:
 def _run_stubbed(
     d: Path, cwd: Path, bd: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(d / "handoff-sha.sh"), *args],
-        cwd=cwd,
-        env=fake_bin_env(bd),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return _run("handoff-sha.sh", cwd, *args, bindir=bd, scripts=d)
 
 
 def test_handoff_push_runs_the_push_after_the_write(
     pushed: Path, bd: Path, tmp_path: Path
 ) -> None:
+    head = _out(pushed, "rev-parse", "HEAD")
     marker_file = tmp_path / "pushed"
     d = _with_push_stub(tmp_path, f"touch {marker_file}")
     r = _run_stubbed(
@@ -127,9 +126,23 @@ def test_handoff_push_runs_the_push_after_the_write(
     )
     assert r.returncode == 0, r.stderr
     assert marker_file.exists()
-    log = _bd_log(bd).read_text()
-    assert "--add-label" in log
-    assert "--push" not in log
+    assert _bd_log(bd).read_text().strip() == (
+        f"update lode-x --set-metadata review_head={head} --add-label l"
+    )
+    # Printed before the push starts, so a call killed mid-publish still shows it.
+    assert "review_head written for lode-x" in r.stderr
+
+
+def test_handoff_push_is_only_the_first_argument_after_the_field(
+    pushed: Path, bd: Path, tmp_path: Path
+) -> None:
+    """Anywhere later it is a pass-through value, e.g. an option's argument."""
+    marker_file = tmp_path / "pushed"
+    d = _with_push_stub(tmp_path, f"touch {marker_file}")
+    r = _run_stubbed(d, pushed, bd, "lode-x", "review_head", "--append-notes", "--push")
+    assert r.returncode == 0, r.stderr
+    assert not marker_file.exists()
+    assert _bd_log(bd).read_text().strip().endswith("--append-notes --push")
 
 
 def test_handoff_without_push_never_runs_the_push(

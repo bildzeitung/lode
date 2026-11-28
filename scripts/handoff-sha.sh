@@ -16,9 +16,11 @@
 #   Extra arguments (labels, land_summary, ...) pass through to `bd update`
 #   untouched; this script owns only the SHA-valued field and `--push`.
 #   --push (lode-fg7w7.5): after the write succeeds, run scripts/bd-dolt-push.sh,
-#   saving the separate publish call. Never use it where bd state is written
-#   between this call and the push (the builder's escalation path adds
-#   land-escalated after it), because the push would publish too early.
+#   saving the separate publish call. It is recognised only as the first
+#   argument after the field, so a pass-through value is never mistaken for it.
+#   Never use it where bd state is written between this call and the push (the
+#   builder's escalation path adds land-escalated after it), because the push
+#   would publish too early.
 #
 # Exit 0 -> HEAD was derived, validated and written.
 # Exit 1 -> the derived value failed scripts/validate-sha40.sh (its own
@@ -38,7 +40,9 @@
 #           failed (its own exit status, including exit 1 = its guard refused,
 #           is NOT passed through, so it cannot be read as one of 1-5 and look
 #           like a write that did not happen). Re-run scripts/bd-dolt-push.sh;
-#           do not re-run this script.
+#           do not re-run this script. A `--push` call killed mid-publish (a
+#           tool timeout) reports no status of its own, so the "written" line
+#           printed before the push is what says which half is done.
 # Other  -> git's own failure status from `rev-parse HEAD` (no repo, unborn
 #           HEAD); nothing was written.
 
@@ -46,7 +50,7 @@ set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
   echo "handoff-sha.sh: usage: scripts/handoff-sha.sh <ticket-id> <review_head|land_head>" \
-    "[bd-update-args...] (got $# args) -- a broken CALL, nothing was written." >&2
+    "[--push] [bd-update-args...] (got $# args) -- a broken CALL, nothing was written." >&2
   exit 2
 fi
 
@@ -55,10 +59,10 @@ FIELD="$2"
 shift 2
 
 PUSH=0
-ARGS=()
-for a in "$@"; do
-  if [ "$a" = "--push" ]; then PUSH=1; else ARGS+=("$a"); fi
-done
+if [ "${1-}" = "--push" ]; then
+  PUSH=1
+  shift
+fi
 
 case "$FIELD" in
   review_head | land_head) ;;
@@ -86,12 +90,16 @@ if [ "$TIP" != "$SHA" ]; then
   exit 4
 fi
 
-if ! bd update "$ID" --set-metadata "$FIELD=$SHA" ${ARGS[@]+"${ARGS[@]}"}; then
+if ! bd update "$ID" --set-metadata "$FIELD=$SHA" "$@"; then
   echo "handoff-sha.sh: bd update failed for $ID; $FIELD was NOT written." >&2
   exit 3
 fi
 
-if [ "$PUSH" -eq 1 ] && ! "$HERE/bd-dolt-push.sh"; then
+[ "$PUSH" -eq 1 ] || exit 0
+
+echo "handoff-sha.sh: $FIELD written for $ID; publishing with bd-dolt-push.sh" \
+  "-- if this call is cut short, run scripts/bd-dolt-push.sh alone (not this script)." >&2
+if ! "$HERE/bd-dolt-push.sh"; then
   echo "handoff-sha.sh: $FIELD WAS written for $ID but bd-dolt-push.sh failed" \
     "-- re-run scripts/bd-dolt-push.sh (not this script)." >&2
   exit 6
