@@ -136,7 +136,7 @@ CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
 # SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
-# per-character cost without bound. Enforcement lives in the shared library alongside the
+# per-byte cost without bound. Enforcement lives in the shared library alongside the
 # constant (review, lode-rjqm), so this guard and gh-write-guard.sh cannot drift. Measured on
 # the post-transform `$CMD`, i.e. exactly the string handed to `_split_unquoted` below -- see
 # that function's header, and docs/agents-workflow.md for the (a)/(b)/(c) decision.

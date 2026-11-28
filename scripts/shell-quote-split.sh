@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-character bash
+# SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-byte bash
 # loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
 # UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
 # interpreter overhead. Measured at 16 KiB: ~25us for a byte its `plain`
@@ -11,8 +11,8 @@
 # length (lode-snn5v): a 200 KB command (a file catted into a commit message,
 # a giant heredoc) would cost from ~2s to ~50s by its bytes, on a hot path
 # both PreToolUse(Bash) guards run on EVERY Bash call.
-# Both guards cap the length of the string they hand to `_split_unquoted` and
-# FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
+# Both guards cap the byte length of the string they hand to `_split_unquoted`
+# and FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
 #
 # 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
 # claim -- 16 KiB already costs ~500ms of the costliest input and ~100ms of
@@ -267,11 +267,19 @@ _split_unquoted() {
 # not the raw command -- the cap exists to bound THAT loop's input, and
 # measuring a longer, pre-transform string would deny commands whose actual
 # scanned length is under the cap.
+#
+# The length is measured in BYTES, not characters: `_split_unquoted` pins
+# LC_ALL=C and walks the string by byte, so a character count in the caller's
+# UTF-8 locale would let up to 4x more bytes through than the cap states
+# (lode-r5eth). `local` keeps the C locale out of the guard that calls this,
+# which goes on to run its own grep and [[:space:]] matching -- pinned by a test.
 deny_if_over_scan_cap() {
-  local s="$1" who="$2"
-  [ "${#s}" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ] || return 0
-  jq -n --arg len "${#s}" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" --arg who "$who" \
+  local s="$1" who="$2" len
+  local LC_ALL=C
+  len=${#s}
+  [ "$len" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ] || return 0
+  jq -n --arg len "$len" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" --arg who "$who" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
-      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " characters, past the " + $cap + "-character scan cap " + $who + " enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces (e.g. several `bd update --append-notes` calls instead of one) or surface this to a human to widen the cap.")}}'
+      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " bytes, past the " + $cap + "-byte scan cap " + $who + " enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces (e.g. several `bd update --append-notes` calls instead of one) or surface this to a human to widen the cap.")}}'
   return 1
 }

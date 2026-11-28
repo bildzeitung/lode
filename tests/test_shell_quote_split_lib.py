@@ -33,6 +33,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import os_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -357,6 +358,50 @@ def test_scan_length_cap_is_declared_and_enforced_once_and_shared() -> None:
             f"{path.name} sources {LIB_NAME} but never calls deny_if_over_scan_cap before "
             "handing a string to _split_unquoted -- lode-rjqm's fail-closed cap is not wired in"
         )
+
+
+@pytest.mark.parametrize(
+    ("text", "denied"),
+    [("é" * 8_192, False), ("é" * 8_192 + "a", True)],
+    ids=["16384-bytes", "16385-bytes"],
+)
+def test_scan_cap_counts_bytes_and_leaves_the_callers_locale_alone(
+    text: str, denied: bool
+) -> None:
+    """lode-r5eth: `deny_if_over_scan_cap` measures BYTES, the unit `_split_unquoted` walks, so
+    two-byte characters reach the cap at half as many characters as bytes; exactly the cap is
+    allowed and one byte more is denied. Both guards call it in their own shell, not in a
+    `$(...)`, so the `LC_ALL=C` it measures under must not outlive the call: the guards' `grep`
+    and `[[:space:]]` matching would turn byte-oriented.
+
+    The trailing probe line does two jobs. `charlen=1` for one two-byte character shows the
+    caller is back in a UTF-8 locale, and that the UTF-8 locale loaded at all: on a host without
+    `C.UTF-8` bash falls back to C, where characters are bytes and the cap would pass unfixed."""
+    probe_script = (
+        'source "$1"; deny_if_over_scan_cap "$2" probe; rc=$?; x="é"; '
+        'echo "rc=$rc LC_ALL=[${LC_ALL-unset}] charlen=${#x}"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", probe_script, "_", str(LIB), text],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=os_env({"LC_ALL": "C.UTF-8"}),
+    )
+    assert result.returncode == 0, result.stderr
+    *decision, probe = result.stdout.splitlines()
+    assert probe == f"rc={int(denied)} LC_ALL=[C.UTF-8] charlen=1", (
+        f"wrong return code, or the caller's locale changed: {result.stdout!r}"
+    )
+    if not denied:
+        assert not decision, f"a command at the cap must be allowed: {result.stdout!r}"
+        return
+    out = json.loads("\n".join(decision))["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert (
+        "16385 bytes, past the 16384-byte scan cap" in out["permissionDecisionReason"]
+    )
 
 
 def _library_without(name: str) -> str:
