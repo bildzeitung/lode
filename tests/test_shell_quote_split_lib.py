@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 from _gitrepo import os_env
+from conftest import tracked_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -57,7 +58,7 @@ def _non_comment_lines(text: str) -> list[str]:
 
 
 def _consumers() -> list[Path]:
-    """Every scripts/*.sh that sources shell-quote-split.sh -- discovered, never listed.
+    """Every tracked .sh that sources shell-quote-split.sh -- discovered, never listed.
 
     Comment lines are skipped: both guards name the library in their header prose and in a
     `# shellcheck source=` directive, and this library's own header quotes its consumers, so a
@@ -65,7 +66,7 @@ def _consumers() -> list[Path]:
     """
     return sorted(
         p
-        for p in SCRIPTS_DIR.glob("*.sh")
+        for p in (REPO_ROOT / name for name in tracked_paths("*.sh"))
         if p.name != LIB_NAME
         and any(LIB_NAME in ln for ln in _non_comment_lines(p.read_text()))
     )

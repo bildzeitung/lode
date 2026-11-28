@@ -2261,6 +2261,11 @@ REBASE_PICKUP_REFERENCE = SKILLS_DIR / "code" / "rebase-pickup.md"
 #: this one object, so an in-place ``append``/``remove`` anywhere would
 #: silently change the scan surface for the whole session. Rebinding an alias
 #: is the supported narrowing; mutating is now a ``TypeError``.
+#:
+#: The globs read the working tree, not ``git ls-files``, on purpose: an untracked
+#: skill or agent file is loaded by the local Claude Code session, so it is
+#: operative where it sits and its fenced bash should be gated, unlike a scratch
+#: ``.sh``, which nothing runs (those are selected with :func:`tracked_paths`).
 MARKDOWN_CORPUS_GLOBS: tuple[tuple[Path, str], ...] = (
     (SKILLS_DIR, "*/SKILL.md"),
     (REBASE_PICKUP_REFERENCE.parent, REBASE_PICKUP_REFERENCE.name),

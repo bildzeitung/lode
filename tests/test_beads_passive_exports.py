@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pytest
 from _hookharness import SETTINGS
+from conftest import tracked_paths
 
 REPO_ROOT = SETTINGS.parent.parent
 CANONICAL_LIST = REPO_ROOT / "scripts" / "beads-passive-exports.txt"
@@ -144,7 +145,7 @@ def test_no_consumer_hardcodes_the_broad_beads_pathspec() -> None:
 
 
 def _lib_sourcers() -> list[Path]:
-    """Every scripts/*.sh that sources the library, DISCOVERED rather than listed.
+    """Every tracked .sh that sources the library, DISCOVERED rather than listed.
 
     Same reasoning as `tests/test_gate_lib.py`'s `_sources_gate_lib` (lode-pcee): a
     hardcoded roster cannot fail on the newcomer these sweeps exist to catch. Discovery is
@@ -153,7 +154,7 @@ def _lib_sourcers() -> list[Path]:
     point of the discovery.
     """
     found = []
-    for script in sorted((REPO_ROOT / "scripts").glob("*.sh")):
+    for script in sorted(REPO_ROOT / name for name in tracked_paths("*.sh")):
         if script == PASSIVE_EXPORTS_LIB:
             continue
         code = [

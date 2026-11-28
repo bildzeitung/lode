@@ -76,6 +76,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import tracked_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -161,10 +162,10 @@ def _sources_gate_lib(text: str) -> bool:
 
 
 def _consumers() -> list[Path]:
-    """Every scripts/*.sh that sources gate-lib.sh -- discovered, never listed."""
+    """Every tracked .sh that sources gate-lib.sh -- discovered, never listed."""
     return sorted(
         p
-        for p in SCRIPTS_DIR.glob("*.sh")
+        for p in (REPO_ROOT / name for name in tracked_paths("*.sh"))
         if p.name != "gate-lib.sh" and _sources_gate_lib(p.read_text())
     )
 
@@ -456,7 +457,7 @@ def test_the_consumer_sweep_discovers_something():
     """Guards the sweeps below against silently passing on an empty set -- a
     glob that stops matching (renamed directory, changed suffix) would make
     every parametrized test vanish rather than fail."""
-    assert CONSUMERS, "no gate-lib.sh consumers discovered under scripts/"
+    assert CONSUMERS, "no gate-lib.sh consumers discovered among tracked .sh files"
 
 
 def test_merely_naming_gate_lib_does_not_make_a_consumer():
