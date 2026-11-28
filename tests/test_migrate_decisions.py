@@ -17,9 +17,9 @@ _gate = load_module_from_path(
     REPO_ROOT / "scripts" / "check_decisions_entries.py",
 )
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "decisions_small.md"
+DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 # Read at import: every test runs with the list swapped (the autouse fixture).
 REAL_NEW_ENTRY_BULLETS = _mig.NEW_ENTRY_BULLETS
-REAL_OVERRIDES = _mig.OVERRIDES
 runner = CliRunner()
 
 MOVE = _mig.Override(
@@ -121,9 +121,23 @@ def test_the_real_new_entry_list_gives_a_reason_per_row() -> None:
     assert all(prefix and reason for prefix, reason in REAL_NEW_ENTRY_BULLETS)
 
 
-def test_the_real_override_table_moves_the_ucpu_update_to_the_vlok_entry() -> None:
-    (row,) = [o for o in REAL_OVERRIDES if "lode-ucpu" in o.marker]
-    assert (row.source, row.target) == ("lode-sflg", "lode-vlok")
+# Reads the live file with the real tables, so it goes when the cutover
+# (lode-ebayj.4) removes docs/decisions.md. If the lode-sflg section stops
+# deriving decided, lode-pqhhx Q4 says to escalate, not to add an override.
+def test_the_real_tables_move_the_ucpu_update_and_sflg_stays_decided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_mig, "NEW_ENTRY_BULLETS", REAL_NEW_ENTRY_BULLETS)
+    _, entries = _mig.split_entries(DECISIONS.read_text(encoding="utf-8"))
+    _mig.apply_overrides(entries, _mig.OVERRIDES)
+    sflg = _mig.find_entry(entries, "lode-sflg")
+    vlok = "".join(_mig.find_entry(entries, "lode-vlok").lines)
+    moved = "  - **Update (lode-ucpu, 2026-11-20, maintainer):**"
+    assert vlok.count(moved) == 1
+    assert moved not in "".join(sflg.lines)
+    assert "  - **Update (lode-smpk, 2026-11-21):** both questions" in "".join(sflg.lines)
+    _mig.derive_status(sflg)
+    assert sflg.status == "decided"
 
 
 def test_bodies_concatenate_to_the_source_minus_the_preamble() -> None:

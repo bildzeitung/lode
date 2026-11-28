@@ -7430,6 +7430,17 @@ repair. No verbatim move past `check-decisions-no-silent-rewrite.sh`, which exit
 `##` heading in this file are not all attributed to that heading (`lode-skv8`); the log stays
 append-only. The ruling names `scripts/docs_index_query.py`; the chunker it loads is
 `scripts/docs_index_chunker.py`. Decision only; the builds are `lode-l8b7` and `lode-skv8`.
+  - **Update (lode-pqhhx, 2026-11-27, maintainer):** "leave it" is superseded for one case only,
+    the migration of this file to one file per entry (epic `lode-ebayj`). The migration moves
+    `lode-ucpu`'s Update to the entry it answers (`lode-vlok`), through a row in the override
+    table of `scripts/migrate_decisions.py` (`lode-ebayj.8`). The reason recorded with the ruling
+    on `lode-pqhhx`: the guard that "leave it" rested on does not apply to a one-time migration.
+    Read in the script at `lode-ebayj.8`'s review: `check-decisions-no-silent-rewrite.sh` diffs
+    `docs/decisions.md` and nothing else, and the cutover (`lode-ebayj.4`) is to remove that
+    file. By the same ruling `lode-smpk`'s pointer Update under the `lode-sflg` heading is kept
+    word for word, so in the migrated files its "the `lode-ucpu` Update above" has no such Update
+    above it. Nothing in this file moves before the cutover. Recorded at `lode-ebayj.8`'s
+    technical review, 2026-11-28; the wording is the reviewer's.
 
 ## The trace-before-filing and trace-before-recording rules stay scoped as built (decided, lode-51cz)
 
