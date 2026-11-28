@@ -5,11 +5,11 @@ string, cited as `d-<id>`. It opens with this frontmatter, between two `---` lin
 
     id: <id>
     date: YYYY-MM-DD
-    status: open | decided | superseded
+    status: open | decided
     supersedes: [<id>, ...]
     related: [<id>, ...]
 
-`id` is the filename's id; edges are inline lists of ids, never slugs, on the NEW entry only, and
-`superseded_by` is derived, never stored. A committed entry file is never edited or
-deleted. A correction, whole or partial, is a new entry that is a full copy of the old one with the
-corrected portion changed and `supersedes: [<old id>]`. Gate: `scripts/check_decisions_entries.py`.
+`id` is the filename's id; edges are inline lists of ids, never slugs, on the NEW entry only;
+`superseded_by` and superseded status are derived, not stored. A committed entry is never edited or
+deleted. A correction, whole or partial, is a new entry: a full copy of the old with the change and
+`supersedes: [<old id>]`; no entry is superseded twice. Gate: `scripts/check_decisions_entries.py`.

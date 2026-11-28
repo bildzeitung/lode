@@ -22,11 +22,12 @@ def _entry(
     supersedes: str = "[]",
     related: str = "[]",
     date: str = "2026-01-01",
+    status: str = "decided",
     body: str = "body",
 ) -> Path:
     path = directory / f"{entry_id}-{slug}.md"
     path.write_text(
-        f"---\nid: {entry_id}\ndate: {date}\nstatus: decided\n"
+        f"---\nid: {entry_id}\ndate: {date}\nstatus: {status}\n"
         f"supersedes: {supersedes}\nrelated: {related}\n---\n{body}\n"
     )
     return path
@@ -47,6 +48,70 @@ def test_a_passing_supersedes_chain(entries: Path) -> None:
     loaded, _ = _gate.load_entries(entries)
     assert _gate.chain_head(loaded, "aaaaa") == "ccccc"
     assert _gate.chain_head(loaded, "ccccc") == "ccccc"
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        "",
+        "2026-3-1",
+        "20260301",
+        "March 1",
+        "2026-13-01",
+        "2026-01-32",
+        "２０２６-01-01",
+    ],
+)
+def test_a_missing_or_malformed_date_is_flagged(entries: Path, date: str) -> None:
+    _entry(entries, "aaaaa", date=date)
+    assert _gate.check_edges(entries) == ["aaaaa-x.md: date must be YYYY-MM-DD"]
+
+
+def test_an_entry_with_no_date_line_is_flagged(entries: Path) -> None:
+    path = _entry(entries, "aaaaa")
+    path.write_text(path.read_text().replace("date: 2026-01-01\n", ""))
+    assert _gate.check_edges(entries) == ["aaaaa-x.md: date must be YYYY-MM-DD"]
+
+
+@pytest.mark.parametrize("status", ["banana", "", "superseded"])
+def test_a_status_outside_open_or_decided_is_flagged(
+    entries: Path, status: str
+) -> None:
+    _entry(entries, "aaaaa", status=status)
+    assert _gate.check_edges(entries) == [
+        "aaaaa-x.md: status must be one of open|decided"
+    ]
+
+
+def test_open_status_passes(entries: Path) -> None:
+    _entry(entries, "aaaaa", status="open")
+    assert _gate.check_edges(entries) == []
+
+
+@pytest.mark.parametrize(
+    "later", ["[aaaaa]", "[aaaaa, bbbbb]"], ids=["sibling", "ancestor"]
+)
+def test_an_entry_superseded_by_two_entries_is_flagged(
+    entries: Path, later: str
+) -> None:
+    """Every ``supersedes`` edge counts (``ancestor``), so a correction names
+    only the entry it copies, not the entries that one superseded."""
+    _entry(entries, "aaaaa")
+    _entry(entries, "bbbbb", supersedes="[aaaaa]")
+    _entry(entries, "ccccc", supersedes=later)
+    assert _gate.check_edges(entries) == [
+        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc); only one may supersede it"
+    ]
+
+
+def test_an_id_listed_twice_in_one_list_counts_once(entries: Path) -> None:
+    _entry(entries, "aaaaa")
+    _entry(entries, "bbbbb", supersedes="[aaaaa, aaaaa]")
+    assert _gate.check_edges(entries) == []
+    _entry(entries, "ccccc", related="[nopqr, nopqr]")
+    assert _gate.check_edges(entries) == [
+        "ccccc-x.md: related target nopqr does not exist"
+    ]
 
 
 def test_duplicate_id_is_flagged(entries: Path) -> None:
