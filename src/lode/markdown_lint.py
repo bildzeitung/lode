@@ -15,47 +15,26 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from lode.docs_slug import _INLINE_CODE_RE
 from lode.fence_parsing import match_fence_marker
 
 Range = tuple[int, int]
 
-_TRAILING_WS_RE = re.compile(r"[ \t]+$")
 _HEADING_RE = re.compile(r" {0,3}(#{1,6})(?=[ \t]|$)")
-_EXTRA_SPACES_RE = re.compile(r"( {2,})(?=\S)")
+_EXTRA_SPACES_RE = re.compile(r" {2,}(?=\S)")
 #: Trailing whitespace plus an optional ATX closing sequence (``# title ##``),
 #: which CommonMark keeps out of the heading's text.
 _HEADING_TAIL_RE = re.compile(r"(?:[ \t]+#+)?[ \t]*$")
 #: ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not cover.
 _EMPTY_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(\s*\)")
-_BACKTICK_RUN_RE = re.compile(r"`+")
 
 
-def _code_spans(line: str) -> list[Range]:
-    """Inline code spans: a backtick run closed by a same-length run on this
-    line. A run with no matching closer is literal text."""
-    runs = [(m.start(), m.end()) for m in _BACKTICK_RUN_RE.finditer(line)]
-    spans: list[Range] = []
-    i = 0
-    while i < len(runs):
-        length = runs[i][1] - runs[i][0]
-        for j in range(i + 1, len(runs)):
-            if runs[j][1] - runs[j][0] == length:
-                spans.append((runs[i][0], runs[j][1]))
-                i = j
-                break
-        i += 1
-    return spans
-
-
-def _outside_spans(ranges: list[Range], spans: list[Range]) -> list[Range]:
-    """Drop every range with its first or last character in a code span. A
-    span strictly inside a range drops nothing: code in a link's text
-    (``[`f()`]()``) leaves the link a link."""
-    return [
-        (start, end)
-        for start, end in ranges
-        if not any(s <= start < e or s < end <= e for s, e in spans)
-    ]
+def _mask_code_spans(line: str) -> str:
+    """``line`` with every inline code span (a backtick run closed by a
+    same-length run on this line) overwritten by backticks, so offsets hold
+    and no rule can match inside one. A span in a link's text leaves the link
+    matchable: ``[`f()`]()`` is still an empty link."""
+    return _INLINE_CODE_RE.sub(lambda m: "`" * len(m.group()), line)
 
 
 def _is_blank(line: str) -> bool:
@@ -75,16 +54,19 @@ def lint_line_tagged(
     if in_fence[index] or match_fence_marker(line.strip()) is not None:
         return []
     found: list[tuple[str, int, int]] = []
-    spans = _code_spans(line)
 
-    m = _TRAILING_WS_RE.search(line)
-    if m and m.group() != "  " and cursor != (index, m.end()):
-        found.append(("MD009", m.start(), m.end()))
+    # str.rstrip, not a ``[ \t]+$`` search: the regex retries at every
+    # interior space, quadratic in a long mid-line whitespace run.
+    run_start = len(line.rstrip(" \t"))
+    if line[run_start:] not in ("", "  ") and cursor != (index, len(line)):
+        found.append(("MD009", run_start, len(line)))
 
-    for start, end in _outside_spans(
-        [(i, i + 1) for i, c in enumerate(line) if c == "\t"], spans
-    ):
-        found.append(("MD010", start, end))
+    # Both inline rules need one of these; most lines have neither, and this
+    # runs once per drawn row.
+    if "\t" in line or "](" in line:
+        masked = _mask_code_spans(line)
+        found += [("MD010", i, i + 1) for i, c in enumerate(masked) if c == "\t"]
+        found += [("MD042", *m.span()) for m in _EMPTY_LINK_RE.finditer(masked)]
 
     h = _HEADING_RE.match(line)
     if h:
@@ -96,15 +78,12 @@ def lint_line_tagged(
         if not (before_ok and after_ok):
             text_start = len(line) - len(line[h.end() :].lstrip())
             text_end = _HEADING_TAIL_RE.search(line, h.end()).start()
+            # The bounds cross when the heading is only a closing sequence
+            # (``## ##``): the tail swallows the space the text would start after.
             if text_start >= text_end:
                 found.append(("MD022", h.start(1), h.end(1)))
             else:
                 found.append(("MD022", text_start, text_end))
-
-    for start, end in _outside_spans(
-        [(m.start(), m.end()) for m in _EMPTY_LINK_RE.finditer(line)], spans
-    ):
-        found.append(("MD042", start, end))
 
     return sorted(found, key=lambda f: (f[1], f[2]))
 

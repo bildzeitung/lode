@@ -75,6 +75,7 @@ def test_md042_code_span_in_link_text_is_still_a_link():
     assert _lint(["see [`f()`]() x"], 0) == [("MD042", 4, 13)]
     assert _lint(["`[x`]() b"], 0) == []
     assert _lint(["[a `b]() c`"], 0) == []
+    assert _lint(["`[` [x]()"], 0) == [("MD042", 4, 9)]
 
 
 def test_inline_code_span_exempts_tab_and_empty_link():
