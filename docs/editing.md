@@ -2,7 +2,7 @@
 
 How the note body became a keyboard-first markdown authoring surface (`lode-ev5j`): the decisions
 behind it, the browser-safety guard on the open-link binding, and what was deliberately left
-unbuilt, plus the inline lint squiggles (designed in `lode-o7pf`, built as its children land). See
+unbuilt, plus the inline lint squiggles (designed and built in `lode-o7pf`). See
 [keybindings.md](keybindings.md) for the exact key and screen list of the open-link binding this
 doc describes, and [tui.md](tui.md) for layout/footer conventions. Companion doc, reachable from
 [design.md](design.md#map-of-the-docs).
@@ -187,11 +187,11 @@ items parked in editing.md") links to it and cannot be repointed. -->
 ## Inline lint squiggles — get_line underlines (see `lode-o7pf`)
 
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
-**editable** note bodies, updated as you type. **This section is the settled design, only partly
-shipped:** the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`) and the widget
-(`LintTextArea` in `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) are built, but the
-wiring (`lode-o7pf.4`) is not, so no screen draws an underline yet. The
-Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
+**editable** note bodies, updated as you type. **This section is the settled design, and all three
+parts are built:** the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`), the widget
+(`LintTextArea` in `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) and the wiring
+(`lode-o7pf.4`, under **Screen set** below). The Textual behaviour it relies on is verified against
+`textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
 replaces two earlier ones: injecting ranges into `TextArea`'s private `_highlights` map (unsupported
@@ -282,12 +282,14 @@ a heading with no text, and a whitespace-only line counts as blank.
 **Screen set.** `EditScreen` and `CaptureScreen` bodies only; the read-only `VersionViewScreen`
 and `SnapshotViewerScreen` bodies stay clean. Wiring: a `TextArea` subclass in its **own module**
 ([one-widget-per-module fiat](conventions.md#textual-one-screen-or-custom-widget-per-module)),
-opted in through `_markdown_text_area`. It works on the grammar-less fallback `TextArea` too:
-neither `get_line` nor the line-cache clear depends on a grammar.
+opted in through `_markdown_text_area(lint=True)`, which only those two screens pass. The area
+built when the markdown grammar is unavailable is a `LintTextArea` too, and it lints: neither
+`get_line` nor the line-cache clear depends on a grammar.
 
 **Testing.** Pure per-rule unit tests (including non-ASCII lines, a code fence and the two-space
-exemption); assertions on the spans of the `Text` that `get_line` returns, with no
-`pytest-textual-snapshot`; and a perf cap.
+exemption); assertions on the spans of the `Text` that `get_line` returns and, for the wired
+screens, on the underlined text of the rows they draw, with no `pytest-textual-snapshot`; and a
+perf cap.
 
 ## Squiggle form, decided in advance: straight underline, not wavy undercurl
 

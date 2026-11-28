@@ -22,6 +22,8 @@ import pytest
 from rich.color import ColorType
 from rich.style import Style
 from rich.text import Text
+from textual.geometry import Region
+from textual.pilot import Pilot
 from textual.screen import Screen
 from textual.widgets import TextArea
 from textual.widgets.text_area import LanguageDoesNotExist
@@ -41,6 +43,7 @@ from lode.tui.screens.snapshot_viewer import (
     SnapshotViewerScreen,
 )
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
+from lode.tui.widgets.lint_text_area import LintTextArea
 from lode.versions import save
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -449,3 +452,109 @@ def test_highlights_cover_the_agreed_stock_token_set() -> None:
             f"tree-sitter-markdown bump changed this, re-derive _EXPECTED_HIGHLIGHTS "
             f"rather than assuming a lode regression."
         )
+
+
+# ---------------------------------------------------------------------------
+# lode-o7pf.4: only the two editable bodies lint.
+# ---------------------------------------------------------------------------
+
+
+#: An empty link (MD042) and a three-space trailing run (MD009). The caret
+#: must sit on another line than the run for MD009 to flag it.
+_LINTY = "[a]()\n\ntrail   \nend"
+
+
+def _get_line_underlines(area: TextArea) -> list[str]:
+    """Each underlined stretch of the lines ``get_line`` hands the renderer."""
+    out: list[str] = []
+    for index in range(area.document.line_count):
+        line = area.get_line(index)
+        out += [
+            line.plain[span.start : span.end]
+            for span in line.spans
+            if getattr(span.style, "underline", False)
+        ]
+    return out
+
+
+def _drawn_underlines(area: TextArea) -> list[str]:
+    """The underlined text of each drawn row that has any, top to bottom."""
+    rows = area.render_lines(Region(0, 0, *area.outer_size))
+    drawn = (
+        "".join(seg.text for seg in row if seg.style and seg.style.underline)
+        for row in rows
+    )
+    return [text for text in drawn if text]
+
+
+@pytest.mark.parametrize("language", ["markdown", None], ids=["grammar", "fallback"])
+def test_markdown_text_area_lint_flag_picks_a_linting_widget(
+    monkeypatch: pytest.MonkeyPatch, language: str | None
+) -> None:
+    if language is None:
+        _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
+    plain = _markdown_text_area(_LINTY, id="a")
+    linted = _markdown_text_area(_LINTY, id="a", lint=True)
+
+    assert linted.language == language
+    assert type(plain) is TextArea
+    assert type(linted) is LintTextArea
+    assert _get_line_underlines(plain) == []
+    assert _get_line_underlines(linted) == ["[a]()", "   "]
+
+
+def test_editable_bodies_draw_lint_underlines_and_viewers_do_not(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        version_id = save(conn, "note-a", _LINTY).version_id
+        _insert_snapshot(conn, snapshot_id="snap-1", body=_LINTY)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _type_undo_redo(pilot: Pilot[None], body: TextArea) -> list[list[str]]:
+        """What is drawn after typing a trailing run at the end of the body,
+        leaving its line, undoing that and redoing it: the run is underlined
+        only while the caret is off its line."""
+        body.cursor_location = body.document.end
+        await pilot.press("x", "space", "space", "space")
+        await pilot.pause()
+        steps = [_drawn_underlines(body)]
+        await pilot.press("enter")
+        await pilot.pause()
+        steps.append(_drawn_underlines(body))
+        for step in (body.undo, body.redo):
+            step()
+            await pilot.pause()
+            steps.append(_drawn_underlines(body))
+        return steps
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, CaptureScreen)
+            body = app.screen.query_one(f"#{BODY_ID}", LintTextArea)
+            assert await _type_undo_redo(pilot, body) == [[], ["   "]] * 2
+
+            app.push_screen(EditScreen("note-a"))
+            await pilot.pause()
+            body = app.screen.query_one(f"#{EDIT_BODY_ID}", LintTextArea)
+            loaded = ["[a]()", "   "]
+            assert _drawn_underlines(body) == loaded
+            assert await _type_undo_redo(pilot, body) == [loaded, [*loaded, "   "]] * 2
+
+            for screen, wid in (
+                (VersionViewScreen("note-a", version_id), VERSION_BODY_ID),
+                (SnapshotViewerScreen("snap-1"), SNAPSHOT_VIEWER_BODY_ID),
+            ):
+                app.push_screen(screen)
+                await pilot.pause()
+                body = app.screen.query_one(f"#{wid}", TextArea)
+                assert body.text == _LINTY
+                assert not isinstance(body, LintTextArea)
+                assert _drawn_underlines(body) == []
+
+    asyncio.run(_drive())
