@@ -136,6 +136,15 @@ OVERRIDES: tuple[Override, ...] = (
         "pointer saying the lode-d3snk Update above does not belong here, "
         "obsolete once it is moved",
     ),
+    # lode-pqhhx Q4=A: supersedes lode-tikr's leave-it ruling for the migration
+    # only; the no-silent-rewrite guard behind it does not bind a one-time
+    # migration. The lode-smpk pointer stays verbatim in the lode-vlok entry.
+    Override(
+        "lode-sflg",
+        "**Update (lode-ucpu, 2026-11-20, maintainer):**",
+        "answers the lode-vlok entry, per the lode-smpk pointer",
+        target="lode-vlok",
+    ),
 )
 
 

@@ -19,6 +19,7 @@ _gate = load_module_from_path(
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "decisions_small.md"
 # Read at import: every test runs with the list swapped (the autouse fixture).
 REAL_NEW_ENTRY_BULLETS = _mig.NEW_ENTRY_BULLETS
+REAL_OVERRIDES = _mig.OVERRIDES
 runner = CliRunner()
 
 MOVE = _mig.Override(
@@ -118,6 +119,11 @@ def test_a_new_entry_row_that_matches_nothing_or_twice_is_an_error(
 def test_the_real_new_entry_list_gives_a_reason_per_row() -> None:
     assert REAL_NEW_ENTRY_BULLETS
     assert all(prefix and reason for prefix, reason in REAL_NEW_ENTRY_BULLETS)
+
+
+def test_the_real_override_table_moves_the_ucpu_update_to_the_vlok_entry() -> None:
+    (row,) = [o for o in REAL_OVERRIDES if "lode-ucpu" in o.marker]
+    assert (row.source, row.target) == ("lode-sflg", "lode-vlok")
 
 
 def test_bodies_concatenate_to_the_source_minus_the_preamble() -> None:
