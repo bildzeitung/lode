@@ -6376,7 +6376,7 @@ entries below from being rewritten to chase the current tree.)
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
-  [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
+  `scripts/docs_index_loader.py`'s `load_sibling()`, but each of
   `docs_index_build.py`, `docs_index_log.py` and `docs_index_query.py` still has to reach that file
   by path first — `scripts/` is not an installed package, so the bootstrap needs the very
   `spec_from_file_location`/`exec_module` mechanism the loader exists to remove one level up. Three
@@ -6403,7 +6403,7 @@ entries below from being rewritten to chase the current tree.)
   object and break `isinstance`) and the caching must come back. Note the contrast with
   `load_sibling()` itself, which *does* cache: the modules it loads carry real top-level state that
   callers depend on getting back as the same object every time.
-  [`tests/test_docs_index_loader.py`](../tests/test_docs_index_loader.py) pins this against the
+  `tests/test_docs_index_loader.py` pins this against the
   SHIPPED code, not against a copy of the bootstrap: it AST-scans all three callers for any
   `sys.modules[...]` write, AST-scans the loader itself for any top-level state, checks that
   importing each caller leaves no public `docs_index_loader` entry behind, and checks that
