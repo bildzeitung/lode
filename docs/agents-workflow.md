@@ -2497,6 +2497,34 @@ fixed by asserting the full four-name contract in the same block, pinned by a pa
 the identical fail-OPEN class `lode-dia6`'s own review closed for the functions, reopened one line
 lower down.
 
+**Update (2026-11-28, lode-snn5v): the scan reads a 1 KiB window, so its cost is linear in the
+input.** `_split_unquoted` now reads `c`, the lookahead byte and the plain-run chunk from `w`, a
+1 KiB copy of the input from offset `wb`, refreshed when `i` passes the point that leaves 66 bytes
+of window ahead of it; a window that reaches the end of the input never refreshes. The cause of the
+quadratic cost was not checked against the bash source: the measurements in the Update above show
+a `${s:i:1}` costing time in proportion to the length of `s`, and one on a 1 KiB window costs the
+1 KiB price whatever the input length. Output is byte-identical to the pre-change function on a
+differential fuzz (2,400 inputs of 5 to 3,300 bytes, every byte value 1 to 255, specials and
+backslash pairs placed within 2 bytes of offsets 958-960, 1,023-1,025, 1,980, 2,047-2,049 and 3,071,
+under `LC_ALL=C` and `C.UTF-8`, no mismatch; the harness was shown to fail with a window limit past
+the window end). Measured, bash 5.2.21, C locale, user+sys, min of 5, load average 2-10, old then
+new:
+
+| input | 4 KiB | 16 KiB | 36 KB |
+|---|---|---|---|
+| `#` repeated | 63 → 60 ms | 407 → 238 ms | 1601 → 531 ms |
+| `a#` repeated | 61 → 50 ms | 500 → 213 ms | 2017 → 464 ms |
+| prose lines | 2 → 2 ms | 17 → 9 ms | 68 → 20 ms |
+| quoted commit command | 10 → 9 ms | 81 → 33 ms | 354 → 82 ms |
+
+Per byte, `#` repeated is 14.6, 14.5 and 14.4 us at the three sizes. At 200 KB, new only: `#` repeated
+3.3 s, `a#` repeated 3.6 s, prose 0.13 s. These replace the figures above that extrapolate the
+cost: the 200 KB command costs ~3.5 s of the costliest shapes, not ~6 s or 33-48 s; 36 KB of the
+costliest shape costs ~0.5 s, not ~1.1 s or 1.9 s; the worst 16 KiB input costs ~240 ms, not ~500
+ms. The cap stays at 16 KiB: this entry re-decides nothing about it (lode-mxo0h's ruling stands,
+and lode-snn5v's figures are there for it to be revisited with). The window edge is pinned by
+`test_split_reads_through_a_window_without_losing_a_byte_at_its_edge`.
+
 ### Validate `land_head`/`review_head` shape before trusting them as drift signals (lode-xdg3)
 
 **During the `/code` fan-out of 2026-08-08, a rebase pickup (`lode-r9z0`) wrote a 39-character

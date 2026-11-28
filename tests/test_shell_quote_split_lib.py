@@ -490,3 +490,30 @@ def test_split_plain_run_stops_at_a_byte_of_every_other_chain_branch(pad: int) -
         f'{run}\N{LATIN SMALL LETTER E WITH ACUTE}{run} "x\ny"',
     ):
         assert _split(unchanged) == unchanged
+
+
+WINDOW_EDGES = [
+    pad + shift for pad in (1024, 2048 - 66, 3 * 1024) for shift in range(-70, 4, 3)
+] + [1022, 1023, 1024, 1025]
+
+
+@pytest.mark.parametrize("filler", ["a", ";", "a;"])
+@pytest.mark.parametrize("pad", WINDOW_EDGES)
+def test_split_reads_through_a_window_without_losing_a_byte_at_its_edge(
+    filler: str, pad: int
+) -> None:
+    """lode-snn5v: the scan reads a 1 KiB window of the input, refreshed as it advances.
+    Every special byte placed before, on and after a window edge, in each quote state,
+    must be handled as it is mid-string: the lookahead after `$` and the byte after a
+    backslash are the reads that cross an edge."""
+    lead = (filler * pad)[:pad]  # `;` is a chain step per byte and leaves the join alone
+    for text in (
+        ";b'c;d'e;x",
+        r'"x|y$(z`w`)"|q',
+        r"\;a\\;b\'c;d",
+        r'"$a$(b" $',
+        "'a;b\nc' \"d;e\nf\" ;g",
+    ):
+        # `lead` leaves the quote state at none and sets no join-abandoning flag, so the
+        # output past it is the output for `text` alone, which no window ever touches.
+        assert _split(lead + text) == _split(lead) + _split(text)

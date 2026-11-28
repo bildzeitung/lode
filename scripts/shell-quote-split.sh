@@ -2,20 +2,21 @@
 #
 # SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-byte bash
 # loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
-# UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
-# interpreter overhead. Measured at 16 KiB: ~25us for a byte its `plain`
-# pattern does not match, which walks the whole quote-state chain, and ~33us
-# for a whole run of bytes it does match, which one step appends (lode-5lv5e).
-# So the costliest input alternates one plain byte with one other
-# (`a#a#...`). Cost is UNBOUNDED in the input, and both figures grow with its
-# length (lode-snn5v): a 200 KB command (a file catted into a commit message,
-# a giant heredoc) would cost from ~2s to ~50s by its bytes, on a hot path
-# both PreToolUse(Bash) guards run on EVERY Bash call.
+# UTF-8 locale, and reading through a 1 KiB window instead of the whole string
+# fixed the rest of the growth (lode-snn5v), so cost is now LINEAR in the input.
+# Still a per-byte interpreter loop, though. Measured (bash 5.2.21, C locale,
+# user+sys): ~14us per byte its `plain` pattern does not match, which walks the
+# whole quote-state chain, at 4 KiB, 16 KiB and 36 KB alike; a whole run of
+# bytes it does match is one step (lode-5lv5e), so ordinary prose is ~0.5us a
+# byte. The costliest input alternates one plain byte with one other (`a#a#...`).
+# Cost is UNBOUNDED in the input: a 200 KB command (a file catted into a commit
+# message, a giant heredoc) costs ~3.5s of `#*` or `a#a#...`, ~0.13s of prose,
+# on a hot path both PreToolUse(Bash) guards run on EVERY Bash call.
 # Both guards cap the byte length of the string they hand to `_split_unquoted`
 # and FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
 #
 # 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
-# claim -- 16 KiB already costs ~500ms of the costliest input and ~100ms of
+# claim -- 16 KiB already costs ~240ms of the costliest input and ~30ms of
 # quoted prose, so raising it to clear every observed input would defeat the
 # point. Measured against this repo's own traffic
 # (review, lode-rjqm -- the pre-review figure here sampled only the ~20 OPEN bd
@@ -158,15 +159,19 @@ strip_quoted_heredoc_bodies() {
 # PERFORMANCE (review, lode-dia6). `local LC_ALL=C` is load-bearing, not a
 # micro-optimization. Under a UTF-8 locale bash must walk the string to find
 # CHARACTER i, so `${s:i:1}` is O(i) and this loop is O(n^2) -- measured 4.0s on
-# a 25 KB command. Byte indexing makes it O(n). It is behaviour-preserving: the
+# a 25 KB command. It is behaviour-preserving: the
 # loop only ever compares against ASCII operator characters, and every UTF-8
 # non-ASCII byte is >= 0x80, so no byte of a multibyte character can collide
 # with one; every other byte is concatenated through unchanged, so the output
-# is byte-identical. `local` keeps the C locale out of the callers' grep and
+# is byte-identical. Byte indexing alone is not enough: bash 5.2 still measures
+# the whole string on every `${s:i:1}`, so the loop reads a 1 KiB window instead
+# (lode-snn5v). `local` keeps the C locale out of the callers' grep and
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
   local s="$1" out="" c run state=none i=0 len keep="" p prev=0 unjoined=""
+  local w wb=0 o limit
+  local -r W=1024
   local -a joins=()
   # A byte in `plain` is appended before the quote-state chain sees it, in every
   # quote state, and outside quotes it is what the join allowlist above counts
@@ -181,8 +186,22 @@ _split_unquoted() {
   local plain="[$plain_set]" notplain="[!$plain_set]"
   [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
+  # Every read of the input goes through w, a W-byte window of s starting at
+  # offset wb, because one `${s:i:1}` costs time in proportion to the length of
+  # s (lode-snn5v). A step reads at most 64 bytes from i (the plain run) or i+1
+  # (the lookahead), so the window is refreshed whenever i passes `limit`, which
+  # leaves 66 bytes of window ahead of i. A window that already reaches the end
+  # of s never refreshes: limit is len, which i never exceeds in the loop.
+  w="${s:0:W}"
+  if ((len <= W)); then limit=$len; else limit=$((W - 66)); fi
   while ((i < len)); do
-    c="${s:i:1}"
+    if ((i > limit)); then
+      wb=$i
+      w="${s:i:W}"
+      if ((i + W >= len)); then limit=$len; else limit=$((i + W - 66)); fi
+    fi
+    o=$((i - wb))
+    c="${w:o:1}"
     # $plain is a glob pattern, so it must be matched unquoted. A statement of
     # its own, so the directive covers this one test and not the chain below.
     # shellcheck disable=SC2053
@@ -191,7 +210,7 @@ _split_unquoted() {
       # equals k iterations. The chunk is bounded because every step copies
       # it: with the whole tail `${s:i}`, short runs cost more than appending
       # one byte per step.
-      run="${s:i:64}"
+      run="${w:o:64}"
       # $notplain is a glob pattern too, so it stays unquoted.
       # shellcheck disable=SC2295
       run="${run%%$notplain*}"
@@ -202,7 +221,7 @@ _split_unquoted() {
     if [[ "$state" != "single" && "$c" == '\' ]]; then
       out+="$c"
       i=$((i + 1))
-      ((i < len)) && out+="${s:i:1}"
+      ((i < len)) && out+="${w:o+1:1}"
     elif [[ "$state" == "none" && "$c" == "'" ]]; then
       state=single
       out+="$c"
@@ -220,7 +239,7 @@ _split_unquoted() {
       keep=1
     elif [[ "$state" == "double" && "$c" == '$' ]]; then
       keep=1
-      if [[ "${s:i+1:1}" == '(' ]]; then
+      if [[ "${w:o+1:1}" == '(' ]]; then
         out+=$'\n'
         i=$((i + 1))
       else
