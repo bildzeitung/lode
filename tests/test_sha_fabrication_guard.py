@@ -48,6 +48,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,9 @@ REAL_SHA = _real_sha()
 # ---------------------------------------------------------------------------
 
 
-def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
+def _script_output(
+    command: str, *, cwd: Path = REPO_ROOT, env: Mapping[str, str] | None = None
+) -> dict | None:
     """Run the script against `command`; return its hookSpecificOutput, or None if allowed."""
     proc = subprocess.run(
         ["bash", str(SCRIPT), command],
@@ -91,6 +94,7 @@ def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
         text=True,
         timeout=30,
         check=False,
+        env=env,
     )
     assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
     if not proc.stdout.strip():
@@ -659,18 +663,10 @@ def test_scan_cap_counts_bytes_under_a_utf8_caller_locale() -> None:
     assert len(command) < 16_384 < len(command.encode()), (
         "fixture must straddle the cap"
     )
-    proc = subprocess.run(
-        ["bash", str(SCRIPT), command],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-        env=os_env({"LC_ALL": "C.UTF-8"}),
+    out = _script_output(command, env=os_env({"LC_ALL": "C.UTF-8"}))
+    assert out is not None and out["permissionDecision"] == "deny", (
+        "a command past the cap in bytes must DENY under a UTF-8 caller locale"
     )
-    assert proc.returncode == 0, proc.stderr
-    out = json.loads(proc.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
     assert "bytes" in out["permissionDecisionReason"], out["permissionDecisionReason"]
 
 

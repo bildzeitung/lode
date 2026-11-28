@@ -2422,11 +2422,13 @@ cheap (below). Nothing about the mechanism changed: over-cap still DENIES, never
 allows; both guards' over-cap DENY fixtures and the four-name library contract check are untouched.
 
 **Update (lode-r5eth): the cap is measured in bytes, not characters.** `deny_if_over_scan_cap` now
-takes the length under `local LC_ALL=C`, matching `_split_unquoted`, which pins `LC_ALL=C` and
-iterates once per byte. Before, `${#s}` counted characters in the hook process's own locale, so
-under a UTF-8 locale a command of 16,384 two-byte characters (32,768 bytes) passed a cap documented
-as 16 KiB. Every "16 KiB" / "16384" above therefore means bytes; the deny message says "bytes". A
-non-ASCII-heavy command is denied at fewer characters than before (the cap fails closed).
+takes the length under `local LC_ALL=C`, as `_split_unquoted` does to walk the string by byte.
+Before, `${#s}` counted characters in the hook process's own locale, so under a UTF-8 locale a
+command of 16,384 two-byte characters (32,768 bytes) passed a cap documented as 16 KiB. Every
+"16 KiB" / "16384" above therefore means bytes; the deny message says "bytes". A non-ASCII-heavy
+command is denied at fewer characters than before (the cap fails closed). The guard that calls the
+helper keeps its own locale afterwards; `tests/test_shell_quote_split_lib.py` pins that and the
+boundary (16,384 bytes of two-byte characters allowed, one byte more denied).
 
 **Recovery path for a denied command — verified, not asserted.** `deny_if_over_scan_cap` measures
 the literal Bash **command string** the guard is invoked with (`$1`), never file contents that
