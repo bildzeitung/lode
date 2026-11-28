@@ -5,7 +5,10 @@
 # UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
 # interpreter overhead per character (~30us/byte measured -- 25 KB -> ~740ms),
 # with no further per-character algorithmic fix available short of a language
-# change. Cost is UNBOUNDED in the input: a 200 KB command (a file catted into
+# change. (lode-4n0kf: a one-test fast path for ordinary bytes cut ordinary
+# text to ~17us/byte, ~275 ms at the cap; the figures here and below are the
+# pre-change measurements and now stand as UPPER BOUNDS, still reached by input
+# dense in quotes, operators or `$`.) Cost is UNBOUNDED in the input: a 200 KB command (a file catted into
 # a commit message, a giant heredoc) would cost ~6s on a hot path both
 # PreToolUse(Bash) guards run on EVERY Bash call. Both guards cap the length of
 # the string they hand to `_split_unquoted` and FAIL CLOSED (deny) past the
@@ -135,11 +138,11 @@ strip_quoted_heredoc_bodies() {
 # flat quote state are an open set: comments, heredoc bodies, ANSI-C quoting,
 # nested substitutions, backslashes inside backticks. So the join is an
 # ALLOWLIST, not a list of those: it stands only if EVERY byte outside quotes
-# is a quote, a backslash escape, one of ; & |, or in `inert` below, AND no
-# unescaped $ or backtick sits inside "...", AND the scan ends outside a quote.
-# Anything else keeps every in-quote newline for the WHOLE string, each line a
-# segment of its own. A byte missing from `inert` only costs the join, never a
-# segment start; add one only with an argument that it cannot change how the
+# is a quote, a backslash escape, one of ; & |, a newline, or in the plain set
+# below, AND no unescaped $ or backtick sits inside "...", AND the scan ends
+# outside a quote. Anything else keeps every in-quote newline for the WHOLE
+# string, each line a segment of its own. A byte missing from the plain set only
+# costs the join, never a segment start; add one only with an argument that it cannot change how the
 # shell reads a later quote character. `<<` abandons it too, quoted or not.
 # The scan cannot know the join is off until it ends, so each join's offset in
 # the output is recorded and the newline put back there -- one pass, since the
@@ -164,12 +167,18 @@ _split_unquoted() {
   local LC_ALL=C
   local s="$1" out="" c state=none i=0 len keep="" p prev=0 unjoined=""
   local -a joins=()
-  local inert='[A-Za-z0-9_[:space:]./=:,@%+~^>-]'
+  # Bytes that reach the final else in every quote state and set no flag there:
+  # every inert byte except newline (which the in-quote join branch must see).
+  local plain=$'[A-Za-z0-9_[:blank:]\r\f\v./=:,@%+~^>-]'
   [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
-    if [[ "$state" != "single" && "$c" == '\' ]]; then
+    # $plain is a glob pattern, so it must be matched unquoted.
+    # shellcheck disable=SC2053
+    if [[ "$c" == $plain ]]; then
+      out+="$c"
+    elif [[ "$state" != "single" && "$c" == '\' ]]; then
       out+="$c"
       i=$((i + 1))
       ((i < len)) && out+="${s:i:1}"
@@ -203,9 +212,7 @@ _split_unquoted() {
       joins+=("${#out}")
       out+=" "
     else
-      # $inert is a glob pattern, so it must be matched unquoted.
-      # shellcheck disable=SC2053
-      [[ "$state" == "none" && "$c" != $inert ]] && keep=1
+      [[ "$state" == "none" && "$c" != $'\n' ]] && keep=1
       out+="$c"
     fi
     i=$((i + 1))

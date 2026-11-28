@@ -2277,6 +2277,15 @@ guard's cheap pre-filter can screen out is the *common* one: a real `git commit 
 update … --notes …` that legitimately contains the guard's own trigger word plus a long body —
 exactly what `/land` writes constantly.
 
+**Update (lode-4n0kf):** `_split_unquoted` now tests each byte against one plain set (letters,
+digits, `_`, blanks, `\r \f \v`, and `. / = : , @ % + ~ ^ > -`) before the quote-state chain, so an
+ordinary byte costs one test instead of about ten; output is byte-identical (differential fuzz,
+8,004 strings). Re-measured (min of 5, user-visible wall clock, 16 KB inputs): 421 ms → 276 ms for
+base64 text, 173 ms → 102 ms for ~8.8 KB of multi-line notes, i.e. ~26 μs/byte → ~17 μs/byte for
+ordinary text. The ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in this section are
+pre-change measurements and now stand as upper bounds: input dense in quotes, operators or `$`
+still takes the long chain and costs as before.
+
 **Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
 (b) replace the char loop with a regex-driven scan that locates candidate operator characters
 first (via bash's C-level `=~`/`grep -o`) and only tracks quote state around *those* positions, so
