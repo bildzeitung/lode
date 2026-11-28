@@ -56,6 +56,11 @@ def _body(path: Path) -> str:
     return _mig._strip_frontmatter(path.read_text(encoding="utf-8"))
 
 
+def _entry(entry_text: str):
+    """The one entry of an inline text; the test empties the new-entry list."""
+    return _mig.migrate("# t\n\n" + entry_text, overrides=()).entries[0]
+
+
 def _by_title(result, fragment: str):
     (hit,) = [e for e in result.entries if fragment in e.title]
     return hit
@@ -254,14 +259,12 @@ def test_status_and_dates_are_derived_from_the_head() -> None:
 
 @pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_unclear_status_defaults_to_open_and_is_flagged() -> None:
-    both = "# t\n\n- **Open and decided (2026-01-01).** body\n"
-    entry = _mig.migrate(both, overrides=()).entries[0]
+    entry = _entry("- **Open and decided (2026-01-01).** body\n")
     assert (entry.status, bool(entry.status_unclear)) == ("open", True)
-    unruled = (
-        "# t\n\n- **Open: sizing (2026-01-01).** body\n"
+    entry = _entry(
+        "- **Open: sizing (2026-01-01).** body\n"
         "  **Update (lode-x, 2026-01-02):** wording only.\n"
     )
-    entry = _mig.migrate(unruled, overrides=()).entries[0]
     assert (entry.status, bool(entry.status_unclear)) == ("open", True)
 
 
@@ -367,11 +370,8 @@ def test_cli_refuses_a_target_that_already_holds_files(tmp_path: Path) -> None:
     assert (target / "README.md").read_text() == "keep"
 
 
-def _entry(entry_text: str):
-    return _mig.migrate("# t\n\n" + entry_text, overrides=()).entries[0]
-
-
-# Heads of the lode-m4rzt examples (decisions.md lines 59, 144, 151, 159, 173, 183, 270).
+# Heads of the lode-m4rzt examples (decisions.md lines 59, 144, 151, 159, 173, 183,
+# 270) and of the question-titled bullet with a leaning that the ticket quotes.
 @pytest.mark.usefixtures("_no_new_entry_bullets")
 @pytest.mark.parametrize(
     "text",
@@ -461,6 +461,7 @@ def test_decided_title_beats_deferral_wording_in_the_first_paragraph() -> None:
         # Line 5908: the entry is the revisit, and it settled the question.
         ("**Colour, revisited: theming settled.** Text", "decided", False),
         ("**Colour.** Stays unless the position is ever revisited", "open", False),
+        ("**Colour knob: no longer open.** Text", "decided", False),
     ],
 )
 def test_negated_and_backward_looking_wording(
@@ -494,17 +495,23 @@ def test_a_section_is_read_past_its_heading_to_its_first_paragraph_only(
 
 
 @pytest.mark.usefixtures("_no_new_entry_bullets")
-def test_report_lists_title_disagreements() -> None:
-    result = _mig.migrate(
-        "# t\n\n- **Chunk size (2026-01-01).** Tuning waits.\n", overrides=()
-    )
+@pytest.mark.parametrize(
+    ("entry", "row"),
+    [
+        (
+            "- **Chunk size (2026-01-01).** Tuning waits.\n",
+            "line 3: decided -> open (first paragraph says 'Tuning'): 'Chunk",
+        ),
+        (
+            "- **2026-01-01 closes the gap left open above.** body\n",
+            "line 3: open -> decided (title's 'open' is not read as open wording): ",
+        ),
+    ],
+)
+def test_report_lists_a_title_disagreement_with_the_wording(
+    entry: str, row: str
+) -> None:
+    result = _mig.migrate("# t\n\n" + entry, overrides=())
     report = _mig.render_report(result, [], None)
     assert "TITLE DISAGREEMENTS (1" in report
-    assert "line 3: decided -> open (first paragraph says 'Tuning'): 'Chunk" in report
-
-
-@pytest.mark.usefixtures("_no_new_entry_bullets")
-def test_report_says_why_a_left_open_title_reads_decided() -> None:
-    text = "# t\n\n- **2026-01-01 closes the gap left open above.** body\n"
-    report = _mig.render_report(_mig.migrate(text, overrides=()), [], None)
-    assert "line 3: open -> decided (title's 'left open' is not read" in report
+    assert row in report
