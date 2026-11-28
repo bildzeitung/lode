@@ -8339,3 +8339,31 @@ write once the checkpoints are gone? The `human`-labelled ticket `lode-htkr3` as
     reset and `git clean -fd` to the comment groomer's path.
   Upper-bound saving of what was approved: about 910 calls (612 + 298) over the measured window.
   No check is removed.
+
+## /land's post-merge re-gate has no docs-only exemption (decided, lode-brbhf)
+
+Maintainer ruling on `lode-6lw71`, 2026-11-28, option A. `/land` Section 3 used to skip nox for a
+merge set that touched only docs, running `scripts/validate-mermaid.sh` alone. That was the
+file-type reasoning `lode-31kju` ruled out for merges made directly to `trunk` (`CLAUDE.md`: the
+gates run on the merged result, whatever file types the merge touches). `linkcheck` reads every
+tracked markdown file, and tests under `tests/` read files under `docs/`
+(`tests/test_decisions_supersession_markers.py` reads this one), so a docs-only merge set can turn
+the gates red.
+
+The ruling: every merge set that merged anything gets the full re-gate command (`nox -t fix`,
+`nox -s tests`, `nox -t everything-else`, `nox -s lock_currency`), whatever file types it touches.
+`scripts/validate-mermaid.sh` still runs when a merged diff touches a `docs/` diagram. The
+empty-merge-set skip (`lode-0jan`) stays: with nothing merged there is nothing new to certify.
+
+`code-reviewer.md` step 3 said a docs-only branch has no Python gate, which contradicted its
+step 5 (all three buckets); it now says a docs-only branch gets the same gates.
+
+`.claude/skills`, `.claude/agents`, `docs/`, `CLAUDE.md` and `AGENTS.md` were searched for another
+gate exemption argued from file type. `coding.md` step 7 already runs the builder gates for a
+docs-only or shell-only change. Two were found and left as they are. `/land` commits a
+`MISTAKES.md` entry directly on `trunk` and pushes it with no gate run after the commit, on the
+stated ground that the file holds nothing `nox` would catch; `linkcheck` reads that file (probed
+at review: a missing doc path appended to it fails the session). Whether to gate that commit is
+the open decision `lode-3qi40`. The `bd`-generated Session Completion block in `CLAUDE.md` and
+`AGENTS.md` says "Run quality gates (if code changed)"; `bd init` regenerates that block, and its
+own text puts it below repository instructions.
