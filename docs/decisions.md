@@ -8356,14 +8356,14 @@ The ruling: every merge set that merged anything gets the full re-gate command (
 empty-merge-set skip (`lode-0jan`) stays: with nothing merged there is nothing new to certify.
 
 `code-reviewer.md` step 3 said a docs-only branch has no Python gate, which contradicted its
-step 5 (all three buckets); it now says a docs-only branch gets the same gates.
+step 5 (all three buckets); it now says a docs-only branch runs step 5 in full.
 
 `.claude/skills`, `.claude/agents`, `docs/`, `CLAUDE.md` and `AGENTS.md` were searched for another
-gate exemption argued from file type. `coding.md` step 7 already runs the builder gates for a
-docs-only or shell-only change. Two were found and left as they are. `/land` commits a
-`MISTAKES.md` entry directly on `trunk` and pushes it with no gate run after the commit, on the
-stated ground that the file holds nothing `nox` would catch; `linkcheck` reads that file (probed
-at review: a missing doc path appended to it fails the session). Whether to gate that commit is
-the open decision `lode-3qi40`. The `bd`-generated Session Completion block in `CLAUDE.md` and
-`AGENTS.md` says "Run quality gates (if code changed)"; `bd init` regenerates that block, and its
-own text puts it below repository instructions.
+gate exemption argued from file type. Two were found and left as they are; `coding.md` step 7 is
+not one, since it already runs the builder gates for a docs-only or shell-only change. The first:
+`/land` commits a `MISTAKES.md` entry directly on `trunk` and pushes it with no gate run after the
+commit, on the stated ground that the file holds nothing `nox` would catch; `linkcheck` reads that
+file (probed at review: a missing doc path appended to it fails the session). Whether to gate that
+commit is the open decision `lode-3qi40`. The second: the `bd`-generated Session Completion block
+in `CLAUDE.md` and `AGENTS.md` says "Run quality gates (if code changed)"; `bd init` regenerates
+that block, and its own text puts it below repository instructions.
