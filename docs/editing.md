@@ -42,16 +42,17 @@ delimiters, list markers, block-quote markers, thematic breaks, backslash escape
 
 **The palette** (`NOTE_BODY_SYNTAX_STYLES` in `_markdown_area.py`, `lode-lab1`, retuned by
 `lode-dmbc`). The bundled grammar's captures are the complete menu of what *can* be coloured; lode
-maps four of them:
+maps five of them:
 
 | Capture | Covers | Style |
 |---|---|---|
 | `text.literal` | every line of a fenced block (delimiters, info string, body), indented code blocks, reference-link titles | `plum3` |
 | `punctuation.delimiter` | the ` ``` ` fence characters | `grey42` |
 | `heading.marker` | `#`…`######` and setext underlines | `steel_blue3` |
+| `heading` | the heading text, so the whole heading line reads as one unit (`lode-lab1` first left it unmapped; reversed by maintainer revision) | `steel_blue3` |
 | `list.marker` | bullet/ordered markers — **and thematic breaks**, which share the capture | `dark_sea_green4` |
 
-Unmapped, and left that way on purpose: `heading` (the heading text), `link.uri`, `link.label`,
+Unmapped, and left that way on purpose: `link.uri`, `link.label`,
 `punctuation.special` (block-quote markers, which the grammar emits as zero-width spans here),
 `string.escape`, and `none`. `none` is the load-bearing one — `lode-76go` found it is emitted
 *after* `text.literal` in each line's highlight iteration order, so mapping it would win the colour
