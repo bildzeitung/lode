@@ -51,7 +51,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -649,6 +649,29 @@ def test_command_exceeding_the_scan_cap_is_denied_fast() -> None:
         f"guard took {elapsed:.3f}s past the scan cap -- it must deny BEFORE calling "
         "_split_unquoted, not after paying its cost (lode-rjqm)"
     )
+
+
+def test_scan_cap_counts_bytes_under_a_utf8_caller_locale() -> None:
+    """lode-r5eth: the cap bounds the bytes `_split_unquoted` iterates, whatever locale the hook
+    process runs in. 9,000 two-byte characters (18,000 bytes) is under 16,384 characters but
+    over 16,384 bytes, so it must DENY even under a UTF-8 locale, naming bytes as the unit."""
+    command = f"git commit -m '{REAL_SHA} " + ("é" * 9000) + "'"
+    assert len(command) < 16_384 < len(command.encode()), (
+        "fixture must straddle the cap"
+    )
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=os_env({"LC_ALL": "C.UTF-8"}),
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "bytes" in out["permissionDecisionReason"], out["permissionDecisionReason"]
 
 
 # The GLOBAL "which PreToolUse(Bash) guards are installed" inventory assertion (including this

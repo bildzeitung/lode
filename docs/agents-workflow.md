@@ -2390,6 +2390,13 @@ fail-open risk already argued in its bullet above: speculative work for a proble
 cheap (below). Nothing about the mechanism changed: over-cap still DENIES, never truncates, never
 allows; both guards' over-cap DENY fixtures and the four-name library contract check are untouched.
 
+**Update (lode-r5eth): the cap is measured in bytes, not characters.** `deny_if_over_scan_cap` now
+takes the length under `local LC_ALL=C`, matching `_split_unquoted`, which pins `LC_ALL=C` and
+iterates once per byte. Before, `${#s}` counted characters in the hook process's own locale, so
+under a UTF-8 locale a command of 16,384 two-byte characters (32,768 bytes) passed a cap documented
+as 16 KiB. Every "16 KiB" / "16384" above therefore means bytes; the deny message says "bytes". A
+non-ASCII-heavy command is denied at fewer characters than before (the cap fails closed).
+
 **Recovery path for a denied command — verified, not asserted.** `deny_if_over_scan_cap` measures
 the literal Bash **command string** the guard is invoked with (`$1`), never file contents that
 command merely references. So the recovery is to move the large text out of the command string, and
