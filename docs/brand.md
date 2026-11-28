@@ -37,11 +37,12 @@ under gallery lighting. That texture (terminal-native, unglamorous, cumulative) 
 palette and the mark (§3, §5), not a generic "mining" visual vocabulary (pickaxes, hard hats,
 cave-mouths) that has nothing to do with note-taking. The metaphor is structural, not decorative.
 
-**Naming note.** `lode-fhql.1` tracks whether the name `lode` collides with anything that matters
-(PyPI, trademark, domains). It does not gate this brief or anything downstream of it — the project
-does not publish to PyPI (see `docs/release.md`'s Non-goals, reconfirmed 2026-08-12,
-`docs/decisions.md`), so the one collision found so far is inert. If `.1` turns up something that
-actually forces a rename, only this section needs to change.
+**Naming note.** The `lode-fhql.1` name audit is closed. Its outcome is recorded in
+`docs/decisions.md` ("2026-08-14 — DECIDED (`lode-fhql.1`/`lode-fhql.16`/`lode-w3wt`, maintainer
+decision)"): the brand, repo name, CLI command and import package stay `lode`, and only the
+distribution name became `lode-kb`, because an unrelated project already holds `lode` on PyPI. The
+project does not publish to PyPI (see `docs/release.md`'s Non-goals), so that collision is inert for
+publishing. Nothing in the brand needs to change for it.
 
 ## 3. Palette
 
@@ -187,9 +188,7 @@ what gets built, not as a description of something that already exists.
   treatment or **paper** in dark contexts — never primary-on-primary or accent-on-accent.
 - **Light/dark handling.** Any web asset (SVG mark, OG card) is produced in both a light-background
   and a dark-background variant from the start, per `lode-fhql`'s own acceptance criteria — there
-  is no single "the mark" asset; there are always two, selected by the surface's theme, the same
-  way the note-body markdown palette (`lode-dmbc`) was designed against both terminal themes
-  instead of assuming one.
+  is no single "the mark" asset; there are always two, selected by the surface's theme.
 - **What not to do.**
   - Don't stretch, skew, or rotate the mark.
   - Don't add a drop shadow, bevel, gradient fill, or any effect the mark wasn't drawn with.
