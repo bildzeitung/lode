@@ -23,7 +23,7 @@ The report lists every bullet merged into a section, for the reviewer to accept
 or to name in :data:`NEW_ENTRY_BULLETS`.
 
 Frontmatter, derived mechanically. The report lists every date not taken from a
-title and every status derived from a title with open wording:
+title and every status derived from open wording:
 
 - ``id``: random, 5 lowercase base36 characters, unique within the run
   (``--seed`` makes a run repeatable).
@@ -71,18 +71,24 @@ _SLUG_MAX = 60
 # Status wording. A ruling marker is looked for in the 250 characters after an
 # Update's lead-in.
 _OPEN_RE = re.compile(r"\b(open|leaning|undecided|unsettled)\b", re.IGNORECASE)
+# A negated word is not that wording: "rejected, not merely deferred" does not
+# defer, and "deferred, not built" does not say built.
+_NOT = r"(?<!\bnot )(?<!\bnot merely )(?<!\bno longer )"
 # Deferral wording, read in the title and the first paragraph: a deferred,
 # leaning or revisit-later entry is OPEN (lode-g311h, lode-m4rzt option A).
+# "revisited" counts only where it looks ahead ("must be revisited"), not as
+# the label of an entry that is itself the revisit ("X, revisited: settled").
 _DEFER_RE = re.compile(
-    r"\b(deferred|leaning|revisit\w*|(?:must|should) be revisited|tune when|"
-    r"tuning|decide whether|undecided|unsettled|untuned)\b",
+    _NOT + r"\b(deferred|leaning|revisit|revisiting|(?:be|is|ever) revisited|"
+    r"tune when|tuning|decide whether|undecided|unsettled|untuned)\b",
     re.IGNORECASE,
 )
 # "left open" in prose reports a past state, so it is not open wording.
 _LEFT_OPEN_RE = re.compile(r"(?<=\S )left open\b", re.IGNORECASE)
+_LEFT_OPEN_NOTE = "title's 'left open' is not read as open wording"
 _DECIDED_RE = re.compile(
-    r"\b(decided|decision|decisions|settled|accepted|ruled|ruling|resolved|built|"
-    r"landed|done|rejected|withdrawn|fixed|closed|chosen|verified|approved)\b",
+    _NOT + r"\b(decided|decision|decisions|settled|accepted|ruled|ruling|resolved|"
+    r"built|landed|done|rejected|withdrawn|fixed|closed|chosen|verified|approved)\b",
     re.IGNORECASE,
 )
 _RULING_RE = re.compile(
@@ -162,7 +168,8 @@ class Entry:
     status: str = "decided"
     status_unclear: str = ""
     title_status: str = ""
-    status_note: str = ""  # how a title with open wording was read, when not unclear
+    open_wording: str = ""  # the wording that reads open, and where it is
+    status_note: str = ""  # how an entry with open wording was read, when not unclear
     entry_id: str = ""
     filename: str = ""
 
@@ -377,19 +384,29 @@ def _settle(entry: Entry, open_wording: bool) -> tuple[str, str, str]:
     return "open", "", "no Update"
 
 
+def _status_head(entry: Entry) -> str:
+    """The first paragraph on one line, so a phrase wrapped across two source
+    lines still matches. A section's heading is its title and a blank line
+    follows it, so a section's first paragraph is the text after the heading."""
+    lines = entry.lines[1:] if entry.kind == "section" else entry.lines
+    body = "".join(lines).strip()
+    return " ".join(re.split(r"\n\s*\n", body, maxsplit=1)[0].split())
+
+
 def derive_status(entry: Entry) -> None:
     """Open wording is looked for in the title and the first paragraph.
 
-    ``title_status`` is what the title alone (``open``/``leaning``... as the
-    migration first read it) would give; a difference is listed for a hand check.
+    ``title_status`` is what :data:`_OPEN_RE` on the title alone gives; the
+    report lists every entry where it differs from ``status``, for a hand check.
     """
     title = _LEFT_OPEN_RE.sub("", entry.title)
-    head = _LEFT_OPEN_RE.sub("", _first_paragraph(entry))
+    hit, where = _OPEN_RE.search(title) or _DEFER_RE.search(title), "title"
     # The first paragraph's deferral wording is overridden by a decided title
     # ("DECIDED ...: X, revisit if Y"); the title's own wording never is.
-    in_head = not _DECIDED_RE.search(title) and _DEFER_RE.search(head)
-    wording = bool(_OPEN_RE.search(title) or _DEFER_RE.search(title) or in_head)
-    entry.status, entry.status_unclear, entry.status_note = _settle(entry, wording)
+    if not hit and not _DECIDED_RE.search(title):
+        hit, where = _DEFER_RE.search(_status_head(entry)), "first paragraph"
+    entry.status, entry.status_unclear, entry.status_note = _settle(entry, bool(hit))
+    entry.open_wording = f"{where} says {hit.group(0)!r}" if hit else ""
     entry.title_status = _settle(entry, bool(_OPEN_RE.search(entry.title)))[0]
 
 
@@ -684,7 +701,7 @@ def render_report(
             f"STATUS: {sum(x.status == 'open' for x in e)} open, "
             f"{sum(x.status == 'decided' for x in e)} decided; "
             f"{sum(bool(x.status_unclear) for x in e)} UNCLEAR, defaulted to open. "
-            f"Every title with open wording ({len(worded)}):"
+            f"Every entry with open wording ({len(worded)}):"
         ),
     ]
     out += [
@@ -699,7 +716,8 @@ def render_report(
         f"TITLE DISAGREEMENTS ({len(differs)}, status differs from the title alone; hand check):",
     ]
     out += [
-        f"  line {x.start_line}: {x.title_status} -> {x.status}: {x.title[:70]!r}"
+        f"  line {x.start_line}: {x.title_status} -> {x.status} "
+        f"({x.open_wording or _LEFT_OPEN_NOTE}): {x.title[:70]!r}"
         for x in differs
     ]
     guessed = [x for x in e if x.date_source != "title"]

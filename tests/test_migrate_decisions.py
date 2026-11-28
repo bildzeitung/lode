@@ -350,7 +350,7 @@ def test_cli_writes_entries_and_mapping_and_prints_the_report(
     assert "NEW-ENTRY BULLETS (1):" in result.output
     assert "line 46: 'Update (lode-ggg1, 2026-03-10)" in result.output
     assert "SUSPECTS" in result.output
-    assert "Every title with open wording (2):" in result.output
+    assert "Every entry with open wording (2):" in result.output
     assert "line 13: open (no Update)" in result.output
     # A date found past the title is listed as a guess.
     assert "line 10: 2026-02-03 (first paragraph)" in result.output
@@ -367,11 +367,12 @@ def test_cli_refuses_a_target_that_already_holds_files(tmp_path: Path) -> None:
     assert (target / "README.md").read_text() == "keep"
 
 
-def _status(entry_text: str) -> str:
+def _entry(entry_text: str):
     return _mig.migrate("# t\n\n" + entry_text, overrides=()).entries[0]
 
 
 # Heads of the lode-m4rzt examples (decisions.md lines 59, 144, 151, 159, 173, 183, 270).
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 @pytest.mark.parametrize(
     "text",
     [
@@ -410,11 +411,12 @@ def _status(entry_text: str) -> str:
     ],
 )
 def test_deferred_leaning_revisit_entries_derive_open(text: str) -> None:
-    entry = _status(text)
+    entry = _entry(text)
     assert entry.status == "open"
     assert entry.title_status == "decided"
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 @pytest.mark.parametrize(
     "text",
     [
@@ -429,26 +431,80 @@ def test_deferred_leaning_revisit_entries_derive_open(text: str) -> None:
     ],
 )
 def test_left_open_phrase_in_a_title_is_not_open_wording(text: str) -> None:
-    entry = _status(text)
+    entry = _entry(text)
     assert (entry.status, entry.title_status) == ("decided", "open")
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_a_title_that_starts_with_left_open_is_open() -> None:
-    assert (
-        _status("- **Left open: the web-fetch seam (2026-01-01).** body\n").status
-        == "open"
-    )
+    entry = _entry("- **Left open: the web-fetch seam (2026-01-01).** body\n")
+    assert entry.status == "open"
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_decided_title_beats_deferral_wording_in_the_first_paragraph() -> None:
-    entry = _status("- **DECIDED (2026-01-01): X.** Revisit only if Y shows up.\n")
+    entry = _entry("- **DECIDED (2026-01-01): X.** Revisit only if Y shows up.\n")
     assert entry.status == "decided"
 
 
+@pytest.mark.usefixtures("_no_new_entry_bullets")
+@pytest.mark.parametrize(
+    ("head", "status", "unclear"),
+    [
+        # decisions.md line 366: the title says the item was NOT deferred.
+        ("**Epic auto-close — rejected, not merely deferred.** Text", "decided", False),
+        ("**Eval harness.** It is **no longer deferred**", "decided", False),
+        # Lines 350 and 2601: deferred, and the decided word is the negated one.
+        ("**Bounce-lineage cap — deferred, not built.** Text", "open", False),
+        ("**Revision pinning — deferred, not rejected.** Text", "open", False),
+        ("**Debug flag (accepted tradeoff, split deferred).** Text", "open", True),
+        # Line 5908: the entry is the revisit, and it settled the question.
+        ("**Colour, revisited: theming settled.** Text", "decided", False),
+        ("**Colour.** Stays unless the position is ever revisited", "open", False),
+    ],
+)
+def test_negated_and_backward_looking_wording(
+    head: str, status: str, unclear: bool
+) -> None:
+    entry = _entry(f"- {head} (2026-01-01).\n")
+    assert (entry.status, bool(entry.status_unclear)) == (status, unclear)
+
+
+@pytest.mark.usefixtures("_no_new_entry_bullets")
+def test_a_phrase_wrapped_across_two_source_lines_is_read() -> None:
+    entry = _entry(
+        "- **Re-anchor threshold (2026-01-01).** A knob to tune\n  when built.\n"
+    )
+    assert entry.status == "open"
+
+
+@pytest.mark.usefixtures("_no_new_entry_bullets")
+@pytest.mark.parametrize(
+    ("section", "status"),
+    [
+        ("## Rerank model (2026-01-01)\n\nLeaning toward X.\n\nMore.\n", "open"),
+        ("## Rerank model (2026-01-01)\n\nX it is.\n\nLeaning was Y.\n", "decided"),
+        ("## Rerank model (decided, 2026-01-01)\n\nThe leaning was X.\n", "decided"),
+    ],
+)
+def test_a_section_is_read_past_its_heading_to_its_first_paragraph_only(
+    section: str, status: str
+) -> None:
+    assert _entry(section).status == status
+
+
+@pytest.mark.usefixtures("_no_new_entry_bullets")
 def test_report_lists_title_disagreements() -> None:
     result = _mig.migrate(
         "# t\n\n- **Chunk size (2026-01-01).** Tuning waits.\n", overrides=()
     )
     report = _mig.render_report(result, [], None)
     assert "TITLE DISAGREEMENTS (1" in report
-    assert "decided -> open" in report
+    assert "line 3: decided -> open (first paragraph says 'Tuning'): 'Chunk" in report
+
+
+@pytest.mark.usefixtures("_no_new_entry_bullets")
+def test_report_says_why_a_left_open_title_reads_decided() -> None:
+    text = "# t\n\n- **2026-01-01 closes the gap left open above.** body\n"
+    report = _mig.render_report(_mig.migrate(text, overrides=()), [], None)
+    assert "line 3: open -> decided (title's 'left open' is not read" in report
