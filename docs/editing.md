@@ -37,8 +37,10 @@ immediately).
 **Colour depth is block-level only, not inline** — a scope decision, not a bug: **emphasis,
 strong, inline code spans, and inline links (`[text](url)`) are NOT coloured.** What *is*
 coloured: headings and heading markers, fenced/indented code and fence
-delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
-*reference-style* link definitions (`[label]: url` — not inline `[text](url)`).
+delimiters, list markers, thematic breaks, and the optional title of a *reference-style* link
+definition (`[label]: url "title"` — not inline `[text](url)`). The grammar also captures
+block-quote markers, backslash escapes and the label and URL of a reference-link definition, but
+lode leaves those uncoloured; see the palette below.
 
 **The palette** (`NOTE_BODY_SYNTAX_STYLES` in `_markdown_area.py`, `lode-lab1`, retuned by
 `lode-dmbc`). The bundled grammar's captures are the complete menu of what *can* be coloured; lode
@@ -65,8 +67,9 @@ and so dims the fence characters on top of the whole-line code span.
 the original `text.literal` colour was `magenta` (index 5), which is why it rendered harsh and why
 there was no way to soften it in place. The 256-colour names render consistently without requiring
 truecolor, so hex — which would have hardcoded a dark-background assumption — was not needed.
-Whether any of this should become user-configurable is open; see
-[decisions.md](decisions.md).
+The table's values are defaults: `[tui.theme.syntax]` overrides each of the five (see the
+`[tui.theme]` row in [configuration.md](configuration.md) and [settings.md](settings.md)). The
+design record is the `lode-5zxt` entry in [decisions.md](decisions.md).
 
 **Why block-only.** `lode-ev5j.1`'s spike (verified against textual 8.2.8 + tree-sitter-markdown
 0.5.1) found that `TextArea(language="markdown")` loads only Textual's bundled **block** grammar.
