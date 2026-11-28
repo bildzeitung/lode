@@ -3,22 +3,21 @@
 # SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-character bash
 # loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
 # UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
-# interpreter overhead per byte. A run of bytes its `plain` pattern matches is
-# appended in chunks of up to 64 (lode-5lv5e): at 16 KiB base64 costs ~25x
-# less than the ~17us/byte of lode-4n0kf and a quoted commit message ~4x less.
-# Any other byte walks the whole quote-state chain at ~25-30us, and a plain
-# byte BETWEEN two of those (`a;a;...`) also pays the chunk's substring and
-# pattern cut, so the worst case at the cap is ~40% above lode-4n0kf's. Cost is
-# UNBOUNDED in the input: a 200 KB
-# command (a file catted into a commit message, a giant heredoc) would cost
-# ~3-6s on a hot path both PreToolUse(Bash) guards run on EVERY Bash call.
+# interpreter overhead. Measured at 16 KiB: ~25us for a byte its `plain`
+# pattern does not match, which walks the whole quote-state chain, and ~33us
+# for a whole run of bytes it does match, which one step appends (lode-5lv5e).
+# So the costliest input alternates one plain byte with one other
+# (`a#a#...`). Cost is UNBOUNDED in the input, and both figures grow with its
+# length (lode-snn5v): a 200 KB command (a file catted into a commit message,
+# a giant heredoc) would cost from ~2s to ~50s by its bytes, on a hot path
+# both PreToolUse(Bash) guards run on EVERY Bash call.
 # Both guards cap the length of the string they hand to `_split_unquoted` and
 # FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
 #
 # 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
-# claim -- 16 KiB already costs up to ~275ms of ordinary text and ~400-650ms
-# of bytes `plain` does not match or alternates with, so raising it to clear
-# every observed input would defeat the point. Measured against this repo's own traffic
+# claim -- 16 KiB already costs ~500ms of the costliest input and ~100ms of
+# quoted prose, so raising it to clear every observed input would defeat the
+# point. Measured against this repo's own traffic
 # (review, lode-rjqm -- the pre-review figure here sampled only the ~20 OPEN bd
 # issues and read as far more headroom than there is): git commit messages sit
 # well under it (largest of the last 300: ~4.9 KB, >3x headroom), but across
@@ -167,7 +166,7 @@ strip_quoted_heredoc_bodies() {
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
-  local s="$1" out="" c state=none i=0 len keep="" p prev=0 unjoined=""
+  local s="$1" out="" c run state=none i=0 len keep="" p prev=0 unjoined=""
   local -a joins=()
   # A byte in `plain` is appended before the quote-state chain sees it, in every
   # quote state, and outside quotes it is what the join allowlist above counts
@@ -177,8 +176,9 @@ _split_unquoted() {
   # it cannot change how the shell reads a later quote character.
   local plain_set=$'A-Za-z0-9_[:blank:]\r\f\v./=:,@%+~^>-'
   # `plain` and its complement `notplain` are built from the one set, so they
-  # cannot drift apart.
-  local plain="[$plain_set]" notplain="[!$plain_set]" rest run
+  # cannot drift apart: a byte both matched would stall the loop on an empty
+  # run, and one neither matched would be appended past the chain.
+  local plain="[$plain_set]" notplain="[!$plain_set]"
   [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
@@ -187,12 +187,14 @@ _split_unquoted() {
     # its own, so the directive covers this one test and not the chain below.
     # shellcheck disable=SC2053
     if [[ "$c" == $plain ]]; then
-      # The whole run of plain bytes (up to 64) is appended in one step: the
-      # plain branch only appends, so k bytes at once equal k iterations.
-      # `notplain` must stay unquoted here, as a pattern.
-      rest="${s:i:64}"
+      # The plain branch only appends, so a run of k plain bytes taken at once
+      # equals k iterations. The chunk is bounded because every step copies
+      # it: with the whole tail `${s:i}`, short runs cost more than appending
+      # one byte per step.
+      run="${s:i:64}"
+      # $notplain is a glob pattern too, so it stays unquoted.
       # shellcheck disable=SC2295
-      run="${rest%%$notplain*}"
+      run="${run%%$notplain*}"
       out+="$run"
       i=$((i + ${#run}))
       continue
