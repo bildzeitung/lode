@@ -249,6 +249,11 @@ the link (``[`f()`]()`` is still flagged). Indented code blocks and fences insid
 block quote are **not** exempt in v1 (`fence_flags` reports neither as a fence), so a hard tab in an
 indented code block is underlined. That false positive is accepted.
 
+Recognition follows CommonMark for three inline cases (`lode-k7mr6`): a backslash-escaped
+backtick opens no code span (a backslash inside a span is literal); link text may hold one level of
+nested brackets (`[a[b]c]()` is flagged); and an escaped bracket (`\[`, `\]`) is literal text, not a
+link delimiter.
+
 **Decided (`lode-kgg0h`, maintainer, 2026-11-27).** Four questions raised when this section was
 reviewed, now folded into the table and paragraphs above: MD009 skips the trailing run that ends at
 the cursor (otherwise the underline came and went at every word boundary typed at the end of a

@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from lode.docs_slug import _INLINE_CODE_RE
 from lode.fence_parsing import match_fence_marker
 
 Range = tuple[int, int]
@@ -25,16 +24,41 @@ _EXTRA_SPACES_RE = re.compile(r" {2,}(?=\S)")
 #: Trailing whitespace plus an optional ATX closing sequence (``# title ##``),
 #: which CommonMark keeps out of the heading's text.
 _HEADING_TAIL_RE = re.compile(r"(?:[ \t]+#+)?[ \t]*$")
-#: ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not cover.
-_EMPTY_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(\s*\)")
+#: ``(?<!!)``: ``![alt]()`` is an image, which MD042 does not cover. The text
+#: may hold one level of nested brackets (``[a[b]c]()``); the two alternatives
+#: start on different characters, so the repeat cannot backtrack badly.
+_EMPTY_LINK_RE = re.compile(r"(?<!!)\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*\)")
+#: A backslash escape, or a backtick run: the tokens ``_mask_code_spans`` walks.
+_MASK_TOKEN_RE = re.compile(r"\\.|`+")
 
 
 def _mask_code_spans(line: str) -> str:
     """``line`` with every inline code span (a backtick run closed by a
-    same-length run on this line) overwritten by backticks, so offsets hold
-    and no rule can match inside one. A span in a link's text leaves the link
+    same-length run on this line) overwritten by backticks, and every escaped
+    bracket (``\\[``, ``\\]``) by two underscores, so offsets hold and no rule
+    can match inside a span or on a literal bracket. A backslash escapes
+    outside a span only: an escaped backtick opens nothing, while a backslash
+    inside a span is literal. A span in a link's text leaves the link
     matchable: ``[`f()`]()`` is still an empty link."""
-    return _INLINE_CODE_RE.sub(lambda m: "`" * len(m.group()), line)
+    out = []
+    pos = 0
+    scan = 0
+    while m := _MASK_TOKEN_RE.search(line, scan):
+        tok = m.group()
+        if tok[0] == "\\":
+            if tok[1] in "[]":
+                out += [line[pos : m.start()], "__"]
+                pos = m.end()
+            scan = m.end()
+            continue
+        close = re.compile(rf"(?<!`)`{{{len(tok)}}}(?!`)").search(line, m.end())
+        if close is None:
+            scan = m.end()
+            continue
+        out += [line[pos : m.start()], "`" * (close.end() - m.start())]
+        pos = scan = close.end()
+    out.append(line[pos:])
+    return "".join(out)
 
 
 def _is_blank(line: str) -> bool:
