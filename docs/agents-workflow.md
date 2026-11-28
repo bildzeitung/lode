@@ -1992,12 +1992,15 @@ stand-in command name:
 That list is not closed, so the join is an **allowlist, not a list of those constructs** — the same
 inversion `lode-9mbt` made for the verb list. The join stands only if every byte outside quotes is
 a quote character, a backslash escape, one of `;` `&` `|`, or a member of a short inert set
-(letters, digits, whitespace and `_ . / = : , @ % + ~ ^ > -`), no unescaped `$` or backtick sits
+(letters, digits, whitespace and `_ . / = : , @ % + ~ ^ > -`; in the script, the `plain` pattern
+plus newline), no unescaped `$` or backtick sits
 inside double quotes, and the scan ends outside a quote. Anything else **abandons the join for the
 whole command**: every in-quote newline is kept as a segment start, exactly as before
 `lode-2ctid`. `<<` abandons it too, quoted or not. A byte missing from the inert set only brings
 back the old false deny, which a reword or `git commit -F <file>` gets around; add one only with an
-argument that it cannot change how the shell reads a later quote character. The first form of this
+argument that it cannot change how the shell reads a later quote character, and, since `lode-4n0kf`
+appends a `plain` byte before any other test, only if no branch of the scanner handles that byte in
+any quote state (both conditions are stated at the pattern's declaration). The first form of this
 fix listed constructs instead, and its review found the backtick case above still open, which is
 why the rule is stated as an allowlist.
 
@@ -2277,14 +2280,20 @@ guard's cheap pre-filter can screen out is the *common* one: a real `git commit 
 update … --notes …` that legitimately contains the guard's own trigger word plus a long body —
 exactly what `/land` writes constantly.
 
-**Update (lode-4n0kf):** `_split_unquoted` now tests each byte against one plain set (letters,
-digits, `_`, blanks, `\r \f \v`, and `. / = : , @ % + ~ ^ > -`) before the quote-state chain, so an
-ordinary byte costs one test instead of about ten; output is byte-identical (differential fuzz,
-8,004 strings). Re-measured (min of 5, user-visible wall clock, 16 KB inputs): 421 ms → 276 ms for
-base64 text, 173 ms → 102 ms for ~8.8 KB of multi-line notes, i.e. ~26 μs/byte → ~17 μs/byte for
-ordinary text. The ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in this section are
-pre-change measurements and now stand as upper bounds: input dense in quotes, operators or `$`
-still takes the long chain and costs as before.
+**Update (lode-4n0kf):** `_split_unquoted` now tests each byte first against one plain set — the
+inert set of the [`lode-2ctid` join rule](#false-positive-class-a-gh-command-name-merely-quoted-inside-unrelated-text-lode-obox)
+minus newline — and appends a match before the quote-state chain, so an ordinary byte costs one
+test instead of about ten. Output is byte-identical to the function it replaced: a differential
+fuzz of 8,004 strings at build, and at review 20,025 distinct strings (every byte value in twelve
+quote contexts, every pair from a list of special bytes, and random mixes) under a C caller
+locale, most of them again under a UTF-8 one, with no mismatch. Re-measured at review (min of 9, user+sys CPU, 16 KiB inputs):
+ordinary text (base64, a quoted commit message, multi-line notes) 390–405 ms → 260–285 ms, i.e.
+~24 μs/byte → ~17 μs/byte; input made only of bytes outside the plain set (`#*`, `()`, non-ASCII)
+375–405 ms → 390–415 ms, because such a byte now pays the one extra test ahead of the unchanged
+chain. So the "no further per-character algorithmic win" sentence above no longer holds for
+ordinary bytes, and the ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in this section are
+earlier measurements that now describe only input outside the plain set, give or take the few
+percent that extra test adds. The cap and the reasoning for it are unchanged.
 
 **Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
 (b) replace the char loop with a regex-driven scan that locates candidate operator characters

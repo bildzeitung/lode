@@ -3,20 +3,18 @@
 # SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-character bash
 # loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
 # UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
-# interpreter overhead per character (~30us/byte measured -- 25 KB -> ~740ms),
-# with no further per-character algorithmic fix available short of a language
-# change. (lode-4n0kf: a one-test fast path for ordinary bytes cut ordinary
-# text to ~17us/byte, ~275 ms at the cap; the figures here and below are the
-# pre-change measurements and now stand as UPPER BOUNDS, still reached by input
-# dense in quotes, operators or `$`.) Cost is UNBOUNDED in the input: a 200 KB command (a file catted into
-# a commit message, a giant heredoc) would cost ~6s on a hot path both
-# PreToolUse(Bash) guards run on EVERY Bash call. Both guards cap the length of
-# the string they hand to `_split_unquoted` and FAIL CLOSED (deny) past the
-# cap, rather than let cost grow without bound.
+# interpreter overhead per byte. Measured: ~17us for a byte its `plain` pattern
+# matches, which costs one test (lode-4n0kf), and ~25-30us for any other, which
+# walks the whole quote-state chain. Cost is UNBOUNDED in the input: a 200 KB
+# command (a file catted into a commit message, a giant heredoc) would cost
+# ~3-6s on a hot path both PreToolUse(Bash) guards run on EVERY Bash call.
+# Both guards cap the length of the string they hand to `_split_unquoted` and
+# FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
 #
 # 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
-# claim -- 16 KiB already costs ~500ms, so raising it to clear every observed
-# input would defeat the point. Measured against this repo's own traffic
+# claim -- 16 KiB already costs ~275ms of ordinary text and ~400-500ms of
+# bytes `plain` does not match, so raising it to clear every observed input
+# would defeat the point. Measured against this repo's own traffic
 # (review, lode-rjqm -- the pre-review figure here sampled only the ~20 OPEN bd
 # issues and read as far more headroom than there is): git commit messages sit
 # well under it (largest of the last 300: ~4.9 KB, >3x headroom), but across
@@ -138,12 +136,12 @@ strip_quoted_heredoc_bodies() {
 # flat quote state are an open set: comments, heredoc bodies, ANSI-C quoting,
 # nested substitutions, backslashes inside backticks. So the join is an
 # ALLOWLIST, not a list of those: it stands only if EVERY byte outside quotes
-# is a quote, a backslash escape, one of ; & |, a newline, or in the plain set
+# is a quote, a backslash escape, one of ; & |, a newline, or in `plain`
 # below, AND no unescaped $ or backtick sits inside "...", AND the scan ends
 # outside a quote. Anything else keeps every in-quote newline for the WHOLE
-# string, each line a segment of its own. A byte missing from the plain set only
-# costs the join, never a segment start; add one only with an argument that it cannot change how the
-# shell reads a later quote character. `<<` abandons it too, quoted or not.
+# string, each line a segment of its own. A byte missing from `plain` only
+# costs the join and the fast path, never a segment start; the two conditions
+# for adding one are at its declaration. `<<` abandons it too, quoted or not.
 # The scan cannot know the join is off until it ends, so each join's offset in
 # the output is recorded and the newline put back there -- one pass, since the
 # join changes no other byte of the output. Why, the probes, and the
@@ -167,18 +165,26 @@ _split_unquoted() {
   local LC_ALL=C
   local s="$1" out="" c state=none i=0 len keep="" p prev=0 unjoined=""
   local -a joins=()
-  # Bytes that reach the final else in every quote state and set no flag there:
-  # every inert byte except newline (which the in-quote join branch must see).
+  # A byte in `plain` is appended before the quote-state chain sees it, in every
+  # quote state, and outside quotes it is what the join allowlist above counts
+  # as harmless. Add a byte only if BOTH hold: no branch of the chain matches it
+  # in any state (so none of \ ' " $ ` ; & | ( ) { } and not newline, which the
+  # in-quote join branch must see -- hence [:blank:]\r\f\v, not [:space:]), AND
+  # it cannot change how the shell reads a later quote character.
   local plain=$'[A-Za-z0-9_[:blank:]\r\f\v./=:,@%+~^>-]'
   [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
-    # $plain is a glob pattern, so it must be matched unquoted.
+    # $plain is a glob pattern, so it must be matched unquoted. A statement of
+    # its own, so the directive covers this one test and not the chain below.
     # shellcheck disable=SC2053
     if [[ "$c" == $plain ]]; then
       out+="$c"
-    elif [[ "$state" != "single" && "$c" == '\' ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    if [[ "$state" != "single" && "$c" == '\' ]]; then
       out+="$c"
       i=$((i + 1))
       ((i < len)) && out+="${s:i:1}"
