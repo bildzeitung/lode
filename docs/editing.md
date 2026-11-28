@@ -223,33 +223,36 @@ repaint served entirely from Textual's line cache, such as a cursor blink, does 
 inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
 opener as outside, so the opener is checked with `match_fence_marker`).
 
-**Rules (v1).** Hand-rolled pure functions over `(lines, index, fence context)` returning
-character ranges `[start, end)` on that line; no new dependency (no `pymarkdownlnt`).
+**Rules (v1).** Hand-rolled pure functions over `(lines, index, fence context, cursor)` returning
+character ranges `[start, end)` on that line; no new dependency (no `pymarkdownlnt`). `cursor` is
+the caret's `(row, column)`, read only by MD009. Textual already re-fetches the line the caret
+leaves, so passing it needs no extra invalidation.
 
 | ID | Flags | Underlined range |
 |---|---|---|
-| MD009 | trailing whitespace; exactly two trailing spaces is a markdown hard line break and is **not** flagged | the trailing whitespace run |
+| MD009 | trailing whitespace; exactly two trailing spaces is a markdown hard line break and is **not** flagged; a trailing run that ends at the cursor is **not** flagged (you are still typing it) | the trailing whitespace run |
 | MD010 | hard tab | each tab character |
-| MD018 | no space after the ATX heading marker (`#Heading`) | the `#` run |
 | MD019 | multiple spaces after the ATX heading marker | the extra spaces after the first |
-| MD022 | ATX heading not preceded or followed by a blank line (first line of the buffer needs no blank before, the last none after) | the heading text |
+| MD022 | ATX heading not preceded or followed by a blank line (first line of the buffer needs no blank before, the last none after); a line that is empty or whitespace-only counts as blank | the heading text, or the `#` run when the heading has no text (a bare `##`) |
 | MD042 | empty link target (`[text]()`) | the whole link |
 
 Excluded on purpose: MD012 and MD047 (nothing to underline — blank lines and a missing final
-newline have no characters) and MD034 bare URL (would flag most work notes).
+newline have no characters), and MD034 bare URL and MD018 no space after `#` (each would flag most
+work notes: MD018 matches `#1234 fixed the retry` and `#eng-oncall said`, which CommonMark does
+not read as headings either).
 
-**Open, not yet ruled on (`lode-kgg0h`).** Four questions about the table were raised when this
-section was reviewed. The table above is the design until they are decided:
+**Inline code spans are exempt too.** A range MD010 or MD042 would underline inside an inline code
+span is dropped. A span is a backtick run closed by a run of the same length **on the same line**;
+a span that crosses a line break is not recognized in v1. Indented code blocks and fences inside a
+block quote are **not** exempt in v1 (`fence_flags` reports neither as a fence), so a hard tab in an
+indented code block is underlined. That false positive is accepted.
 
-- **MD009 underlines the space just typed.** One trailing space is flagged, two are not, three
-  are, so the underline comes and goes at every word boundary typed at the end of a line. Checked
-  against `textual` 8.2.8 with a throwaway copy of the table row; no rule knows where the cursor is.
-- **MD018 flags lines that are not headings**, such as `#1234 fixed the retry` or `#eng-oncall` —
-  the reason MD034 is excluded. From the table's wording; not checked against code.
-- **Only fenced code is exempt.** An indented code block, an inline code span and a fence inside a
-  block quote are linted as prose: `fence_flags` reports none of them as inside a fence.
-- **MD022 on a heading with no text** (a bare `##`) has nothing to underline. From the table's
-  wording; not checked against code.
+**Decided (`lode-kgg0h`, maintainer, 2026-11-27).** Four questions raised when this section was
+reviewed, now folded into the table and paragraphs above: MD009 skips the trailing run that ends at
+the cursor (otherwise the underline came and went at every word boundary typed at the end of a
+line, checked against `textual` 8.2.8); MD018 is dropped from v1; inline code spans are exempt,
+indented code and block-quoted fences are accepted false positives; MD022 underlines the `#` run of
+a heading with no text, and a whitespace-only line counts as blank.
 
 **Screen set.** `EditScreen` and `CaptureScreen` bodies only; the read-only `VersionViewScreen`
 and `SnapshotViewerScreen` bodies stay clean. Wiring: a `TextArea` subclass in its **own module**
